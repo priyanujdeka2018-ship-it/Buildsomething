@@ -4,8 +4,9 @@ import {
   Upload, Download, Trash2, ChevronRight, ChevronLeft, Check, AlertCircle,
   Loader2, X, FileText, Plus, BarChart3, BookOpen,
   Copy, Sparkles, Users, Brain, ListChecks, ArrowRight,
-  Clock, Building2, MapPin, AlertTriangle
+  Clock, Building2, MapPin, AlertTriangle, Repeat, DollarSign, Wand2
 } from "lucide-react";
+import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from "recharts";
 
 // ============================================================
 // SECTION 1: CONSTANTS & THEME
@@ -231,6 +232,7 @@ const DEFAULT_STARS = {
     "PRODUCT_DELIVERY", "SCALE_OPS", "SELF_AWARENESS", "RESERVED",
   ],
   stories: [],
+  mockSessions: [],
   bqRouter: [
     { questionPattern: "Walk me through your career", primary: null, backup: null },
     { questionPattern: "Tell me about a time you failed", primary: null, backup: null },
@@ -924,6 +926,175 @@ date: ${todayStr()}
 - [flag 2]`;
 }
 
+function vocabTableText(vocab) {
+  const mr = vocab?.mandatoryReframes || [];
+  if (!mr.length) return "(none provided)";
+  return mr.map(r => `${r.source} → ${r.target}`).join("\n");
+}
+
+function storiesForRole(role, stars) {
+  const all = stars.stories || [];
+  if (role && (role.starIds || []).length) {
+    const mapped = role.starIds.map(id => all.find(s => s.storyId === id)).filter(Boolean);
+    if (mapped.length) return mapped;
+  }
+  return all;
+}
+
+function buildOP03(role, stories, vocab, aiTool = "chatgpt") {
+  const company = role?.company || "the company";
+  const roleTitle = role?.role || "the target role";
+  return `You are a hiring manager at ${company} interviewing a candidate for the role of
+${roleTitle}. Conduct a behavioral interview with 5 questions.
+
+ROLE CONTEXT:
+${role?.whatItIs || role?.top3Requirements || roleTitle}
+
+CANDIDATE'S AVAILABLE STORIES (use these to evaluate relevance of answers):
+${stories.map(s => `${s.storyId}: ${s.title} — ${s.result || s.situation || ""}`).join("\n") || "(none on file)"}
+
+CANDIDATE'S VOCABULARY TABLE (flag if they use the LEFT column instead of RIGHT):
+${vocabTableText(vocab)}
+
+INTERVIEW PROTOCOL:
+1. Ask ONE question at a time. Wait for the full answer before responding.
+2. After each answer, score on 4 dimensions (1-3 scale):
+   - Structure: STAR compliance, ≤2 minutes, clear flow
+   - Specificity: 3+ metrics, named outcomes, quantified scale
+   - Vocabulary: Zero domain-specific jargon from current employer (flag any slips)
+   - Assertiveness: Leads with decisions/actions, no hedging ("I think", "we sort of")
+3. Give brief feedback after each answer, then move to the next question.
+4. Mix question types: at least 1 failure/weakness, 1 leadership, 1 process, 1 data-driven.
+5. Include 1 unexpected question not from the standard behavioral set.
+
+AFTER ALL 5 QUESTIONS, format your output as:
+
+<!-- COS_IMPORT zone:4 type:mock-results date:${todayStr()} -->
+
+## MOCK_RESULTS
+role: ${roleTitle}
+date: ${todayStr()}
+source: ${aiTool}
+questionsAsked: 5
+
+### Q1: [question text]
+storyUsed: [S-code if identifiable]
+structure: [1-3]
+specificity: [1-3]
+vocabulary: [1-3]
+assertiveness: [1-3]
+feedback: [specific coaching]
+
+[repeat for each question]
+
+## SCORE_SUMMARY
+| Dimension | Avg Score | Trend |
+|-----------|-----------|-------|
+| Structure | X.X | — |
+| Specificity | X.X | — |
+| Vocabulary | X.X | — |
+| Assertiveness | X.X | — |
+
+## IMPROVEMENT_ACTIONS
+1. [most important fix]
+2. [second fix]
+3. [third fix]`;
+}
+
+function buildOP04(roleTitle, company, rawAnswer, vocab) {
+  return `Polish this behavioral interview answer for a ${roleTitle || "target"} role${company ? ` at ${company}` : ""}.
+
+ORIGINAL ANSWER:
+${rawAnswer}
+
+RULES:
+1. Maintain STAR structure (Situation → Task → Action → Result)
+2. Target length: ≤300 words (≈2 minutes spoken)
+3. Apply these vocabulary translations (MUST use right column, never left):
+${vocabTableText(vocab)}
+4. Lead with decisions and actions, not analysis
+5. Use "I decided / I built / I held / I escalated" — never "I think" or "we sort of"
+6. Include 3+ specific metrics in the Result section
+7. End on the outcome, not on what you learned (save learning for follow-up)
+
+OUTPUT:
+Provide the polished answer, then a bullet list of what you changed and why.
+Do NOT format as .md import — this is for inline review only.`;
+}
+
+function buildOP05(role, settings) {
+  const cur = settings.currency || "INR";
+  const unit = settings.currencyUnit || "L";
+  const company = role?.company || "the company";
+  const roleTitle = role?.role || "the target role";
+  return `You are an HR Business Partner at ${company} extending an offer for ${roleTitle}.
+Run a realistic salary negotiation simulation.
+
+OFFER DETAILS:
+- Role: ${roleTitle}
+- Grade/Level: ${role?.effortTier ? `tier ${role.effortTier}` : "as discussed"}
+- Base salary offered: ${role?.ctcMin || "?"} ${unit} (${cur})
+- Total comp offered: ${role?.ctcMidpoint || role?.ctcMin || "?"} ${unit} (${cur})
+- The candidate's research suggests market rate is ${role?.ctcMax || "?"} ${unit} (${cur})
+
+NEGOTIATION COUNTERS TO DEPLOY (vary which ones you use — don't use all):
+A. CTC Demand: "We need your current compensation for internal banding."
+B. Grade Lock: "This role is graded at [level] and the band is non-negotiable."
+C. Title Downgrade: "We can't offer [higher title], but the scope is equivalent."
+D. Exploding Offer: "We need your decision by Friday."
+E. Benefits Offset: "The benefits package bridges the gap."
+F. Future Promise: "Next review is in 6 months, high performers get 15-20% bumps."
+
+Deploy 3-4 of these across the conversation. Include at least ONE unexpected counter.
+
+CANDIDATE RULES (things they should practice):
+- Never volunteer current compensation. Deflect: "I'd prefer to focus on the value
+  I bring and the market rate for this scope."
+- Always push one level/band higher than offered
+- If pressed on title, negotiate accelerated review timeline
+- If exploding offer, request a specific extension date
+
+Run the simulation as a natural conversation. After it concludes, provide:
+1. Assessment of the candidate's negotiation performance
+2. Moments where they conceded too easily
+3. Moments where they held well
+4. One thing to practice for next time`;
+}
+
+function parseLooseList(text) {
+  return (text || "").split("\n").map(l => l.trim()).filter(l => /^(?:\d+\.|[-*])\s+/.test(l)).map(l => l.replace(/^(?:\d+\.|[-*])\s+/, "").trim());
+}
+
+function parseMockResults(sections) {
+  const meta = parseMdKeyValues(sections.MOCK_RESULTS || "");
+  const recs = parseMdSubRecords(sections.MOCK_RESULTS || "");
+  const num = v => { const n = parseInt(v); return isNaN(n) ? null : n; };
+  const questions = recs.map(r => ({
+    question: r.title,
+    storyUsed: r.content.storyUsed || null,
+    structure: num(r.content.structure),
+    specificity: num(r.content.specificity),
+    vocabulary: num(r.content.vocabulary),
+    assertiveness: num(r.content.assertiveness),
+    feedback: r.content.feedback || "",
+  }));
+  const dims = ["structure", "specificity", "vocabulary", "assertiveness"];
+  const averages = {};
+  for (const d of dims) {
+    const vals = questions.map(q => q[d]).filter(v => v != null);
+    averages[d] = vals.length ? Math.round((vals.reduce((a, b) => a + b, 0) / vals.length) * 10) / 10 : null;
+  }
+  return {
+    role: meta.role || "",
+    date: meta.date || todayStr(),
+    source: meta.source || "chatgpt",
+    questionsAsked: num(meta.questionsAsked) || questions.length,
+    questions,
+    averages,
+    actions: parseLooseList(sections.IMPROVEMENT_ACTIONS || ""),
+  };
+}
+
 function parseJsonResponse(text) {
   let t = (text || "").trim();
   const fence = t.match(/```(?:json)?\s*([\s\S]*?)```/);
@@ -1374,6 +1545,35 @@ function PromptPanel({ promptId, dispatch }) {
         </button>
       </div>
       {p.tip && <div className="px-3 pb-2 text-[10px] text-gray-600 leading-relaxed">{p.tip}</div>}
+    </div>
+  );
+}
+
+// Dynamic prompt panel for runtime-built prompts (OP-03/04/05/06).
+function RawPromptPanel({ title, tool, text, dispatch, allowImport, tip, icon: Icon = Sparkles }) {
+  const [copied, setCopied] = useState(false);
+  const doCopy = async () => { const ok = await copyToClipboard(text); setCopied(true); setTimeout(() => setCopied(false), 2000); if (!ok) dispatch({ type: "SHOW_TOAST", message: "Copy failed — select & copy manually", toastType: "error" }); };
+  return (
+    <div className="rounded-lg bg-white/5 border border-white/5 overflow-hidden">
+      <div className="flex items-center gap-2 px-3 py-2 border-b border-white/5">
+        <Icon size={14} className="text-amber-400 shrink-0" />
+        <div className="flex-1 min-w-0">
+          <div className="text-xs font-medium text-gray-200 truncate">{title}</div>
+          {tool && <div className="text-[10px] text-gray-500">Recommended: {tool}</div>}
+        </div>
+      </div>
+      <pre className="px-3 py-2 max-h-40 overflow-auto text-[10px] leading-relaxed text-gray-400 whitespace-pre-wrap" style={{ fontFamily: "ui-monospace, monospace" }}>{text}</pre>
+      <div className="flex gap-2 p-2 border-t border-white/5">
+        <button onClick={doCopy} className="flex-1 flex items-center justify-center gap-1.5 py-1.5 text-xs rounded bg-amber-500/15 text-amber-400 hover:bg-amber-500/25 transition-colors">
+          {copied ? <Check size={12} /> : <Copy size={12} />}{copied ? "Copied" : "Copy Prompt"}
+        </button>
+        {allowImport && (
+          <button onClick={() => dispatch({ type: "OPEN_IMPORT" })} className="flex-1 flex items-center justify-center gap-1.5 py-1.5 text-xs rounded bg-white/5 text-gray-300 hover:bg-white/10 transition-colors">
+            <Upload size={12} /> Import .md
+          </button>
+        )}
+      </div>
+      {tip && <div className="px-3 pb-2 text-[10px] text-gray-600 leading-relaxed">{tip}</div>}
     </div>
   );
 }
@@ -2468,28 +2668,277 @@ function ZoneAnalyzer({ data, dispatch }) {
   );
 }
 
+const PREP_TABS = [
+  { id: "stories", label: "Stories", icon: BookOpen },
+  { id: "bq", label: "BQ Router", icon: ListChecks },
+  { id: "mock", label: "Mock", icon: Mic },
+  { id: "negotiate", label: "Negotiate", icon: DollarSign },
+];
+
+function PrepStories({ data, dispatch, saveStars }) {
+  const stories = data.stars.stories || [];
+  const [filter, setFilter] = useState("ALL");
+  const [openId, setOpenId] = useState(null);
+  const [polishFor, setPolishFor] = useState(null);
+
+  const cats = ["ALL", ...Array.from(new Set(stories.map(s => s.category).filter(Boolean)))];
+  const shown = filter === "ALL" ? stories : stories.filter(s => s.category === filter);
+  const targetRole = (data.profile.careerGoal?.targetFunctions || [])[0] || "target role";
+
+  const rehearse = id => saveStars({ ...data.stars, stories: stories.map(s => s.storyId === id ? { ...s, rehearsalCount: (s.rehearsalCount || 0) + 1, lastRehearsed: new Date().toISOString() } : s) });
+
+  if (stories.length === 0) {
+    return <EmptyState icon={BookOpen} title="No Stories Yet" description="Build STAR stories in Onboarding first — they power mocks, the BQ router, and playbooks." action="Go to Onboarding" onAction={() => dispatch({ type: "SET_ZONE", zone: "onboard" })} />;
+  }
+
+  return (
+    <div className="space-y-3">
+      <div className="flex gap-1.5 overflow-x-auto pb-1">
+        {cats.map(c => (
+          <button key={c} onClick={() => setFilter(c)} className={`px-2.5 py-1 rounded-lg text-[11px] whitespace-nowrap transition-colors ${filter === c ? "bg-amber-500/15 text-amber-400" : "bg-white/5 text-gray-500 hover:text-gray-300"}`}>
+            {c === "ALL" ? "All" : c.replace(/_/g, " ").toLowerCase()}
+          </button>
+        ))}
+      </div>
+      <div className="space-y-2">
+        {shown.map(s => {
+          const open = openId === s.storyId;
+          return (
+            <div key={s.storyId} className="rounded-lg bg-white/5 border border-white/5 overflow-hidden">
+              <button onClick={() => { setOpenId(open ? null : s.storyId); setPolishFor(null); }} className="w-full flex items-center gap-2 p-2.5 text-left">
+                <span className="text-[10px] font-mono text-amber-400 shrink-0">{s.storyId}</span>
+                <span className="flex-1 min-w-0 text-xs text-gray-200 truncate">{s.title || "Untitled"}</span>
+                <span className="text-[9px] text-teal-400">{"★".repeat(s.starRating || 0)}</span>
+                {s.rehearsalCount > 0 && <span className="text-[9px] text-gray-500 inline-flex items-center gap-0.5"><Repeat size={9} />{s.rehearsalCount}</span>}
+                <ChevronRight size={14} className={`text-gray-600 shrink-0 transition-transform ${open ? "rotate-90" : ""}`} />
+              </button>
+              {open && (
+                <div className="p-2.5 pt-0 space-y-2 border-t border-white/5">
+                  {[["S", s.situation], ["T", s.task], ["A", s.action], ["R", s.result]].map(([k, v]) => v && (
+                    <div key={k} className="flex gap-2">
+                      <span className="text-[10px] font-mono text-amber-400 w-3 shrink-0">{k}</span>
+                      <span className="text-[11px] text-gray-400 leading-relaxed">{v}</span>
+                    </div>
+                  ))}
+                  {(s.metrics || []).length > 0 && <div className="flex flex-wrap gap-1">{s.metrics.map((m, i) => <Badge key={i} variant="teal">{m}</Badge>)}</div>}
+                  <div className="flex items-center gap-2 text-[10px] text-gray-500">
+                    {s.lastRehearsed && <span>Last rehearsed {s.lastRehearsed.slice(0, 10)}</span>}
+                  </div>
+                  <div className="flex gap-2">
+                    <button onClick={() => rehearse(s.storyId)} className="flex items-center gap-1 px-2.5 py-1.5 text-[11px] rounded bg-teal-500/15 text-teal-400 hover:bg-teal-500/25"><Repeat size={11} />Rehearsed +1</button>
+                    <button onClick={() => setPolishFor(polishFor === s.storyId ? null : s.storyId)} className="flex items-center gap-1 px-2.5 py-1.5 text-[11px] rounded bg-amber-500/15 text-amber-400 hover:bg-amber-500/25"><Wand2 size={11} />Polish</button>
+                  </div>
+                  {polishFor === s.storyId && (
+                    <RawPromptPanel
+                      title="Answer Polishing (OP-04)" tool="Any AI" icon={Wand2} dispatch={dispatch}
+                      tip="Paste into any AI for an inline-polished answer. This one is review-only — not a .md import."
+                      text={buildOP04(targetRole, "", `Situation: ${s.situation}\nTask: ${s.task}\nAction: ${s.action}\nResult: ${s.result}`, data.vocab)}
+                    />
+                  )}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function PrepBQRouter({ data, dispatch, saveStars }) {
+  const stories = data.stars.stories || [];
+  const router = data.stars.bqRouter || [];
+  const [openIdx, setOpenIdx] = useState(null);
+  const byId = id => stories.find(s => s.storyId === id);
+
+  const setMap = (idx, field, val) => saveStars({ ...data.stars, bqRouter: router.map((r, i) => i === idx ? { ...r, [field]: val || null } : r) });
+
+  return (
+    <div className="space-y-2">
+      <p className="text-[11px] text-gray-500">Map each behavioral question pattern to a primary and backup story.</p>
+      {router.map((r, idx) => {
+        const open = openIdx === idx;
+        const primary = byId(r.primary);
+        return (
+          <div key={idx} className="rounded-lg bg-white/5 border border-white/5 overflow-hidden">
+            <button onClick={() => setOpenIdx(open ? null : idx)} className="w-full flex items-center gap-2 p-2.5 text-left">
+              <span className="flex-1 min-w-0 text-[11px] text-gray-300 truncate">{r.questionPattern}</span>
+              {r.primary ? <Badge variant="amber">{r.primary}</Badge> : <span className="text-[10px] text-gray-600">unmapped</span>}
+              <ChevronRight size={14} className={`text-gray-600 shrink-0 transition-transform ${open ? "rotate-90" : ""}`} />
+            </button>
+            {open && (
+              <div className="p-2.5 pt-0 space-y-2 border-t border-white/5">
+                <div className="grid grid-cols-2 gap-2">
+                  {["primary", "backup"].map(field => (
+                    <label key={field} className="block">
+                      <span className="text-[10px] text-gray-500 uppercase tracking-wider">{field}</span>
+                      <select value={r[field] || ""} onChange={e => setMap(idx, field, e.target.value)} className="mt-1 w-full bg-black/30 rounded px-2 py-1.5 text-[11px] text-white border border-white/5 focus:border-amber-500/30 focus:outline-none">
+                        <option value="">—</option>
+                        {stories.map(s => <option key={s.storyId} value={s.storyId}>{s.storyId}: {s.title}</option>)}
+                      </select>
+                    </label>
+                  ))}
+                </div>
+                {primary && (
+                  <div className="p-2 rounded bg-black/20 space-y-1">
+                    <div className="text-[10px] text-amber-400 font-mono">{primary.storyId} · {primary.title}</div>
+                    {primary.result && <div className="text-[10px] text-gray-400 leading-relaxed">{primary.result}</div>}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function PrepMock({ data, dispatch }) {
+  const roles = data.pipeline.roles || [];
+  const [roleId, setRoleId] = useState(roles[0]?.id || "");
+  const role = roles.find(r => r.id === roleId) || null;
+  const sessions = data.stars.mockSessions || [];
+
+  const prompt = buildOP03(role, storiesForRole(role, data.stars), data.vocab);
+
+  const chartData = sessions.map((s, i) => ({
+    name: (s.date || `#${i + 1}`).slice(5),
+    Structure: s.scores?.structure ?? null,
+    Specificity: s.scores?.specificity ?? null,
+    Vocabulary: s.scores?.vocabulary ?? null,
+    Assertiveness: s.scores?.assertiveness ?? null,
+  }));
+
+  return (
+    <div className="space-y-3">
+      <label className="block">
+        <span className="text-[11px] text-gray-500 uppercase tracking-wider">Role</span>
+        <select value={roleId} onChange={e => setRoleId(e.target.value)} className="mt-1 w-full bg-black/30 rounded-lg px-2.5 py-2 text-sm text-white border border-white/5 focus:border-amber-500/30 focus:outline-none">
+          <option value="">Generic (target functions)</option>
+          {roles.map(r => <option key={r.id} value={r.id}>{r.role} · {r.company}</option>)}
+        </select>
+      </label>
+
+      <RawPromptPanel title="Mock Interview (OP-03)" tool="ChatGPT / Gemini" icon={Mic} dispatch={dispatch} allowImport text={prompt}
+        tip="Run the 5-question mock, then import the .md results — story rehearsals and the trend below update automatically." />
+
+      {sessions.length > 0 && (
+        <div className="space-y-2">
+          <div className="text-[11px] text-gray-500 uppercase tracking-wider">Score Trend ({sessions.length} sessions)</div>
+          <div className="h-48 rounded-lg bg-white/5 border border-white/5 p-2">
+            <ResponsiveContainer width="100%" height="100%">
+              <LineChart data={chartData} margin={{ top: 8, right: 8, left: -20, bottom: 0 }}>
+                <CartesianGrid stroke="#ffffff10" />
+                <XAxis dataKey="name" tick={{ fontSize: 9, fill: "#6b7280" }} />
+                <YAxis domain={[0, 3]} ticks={[0, 1, 2, 3]} tick={{ fontSize: 9, fill: "#6b7280" }} />
+                <Tooltip contentStyle={{ background: "#0d1117", border: "1px solid #ffffff20", borderRadius: 8, fontSize: 11 }} />
+                <Line type="monotone" dataKey="Structure" stroke="#fbbf24" strokeWidth={2} dot={false} connectNulls />
+                <Line type="monotone" dataKey="Specificity" stroke="#2dd4bf" strokeWidth={2} dot={false} connectNulls />
+                <Line type="monotone" dataKey="Vocabulary" stroke="#60a5fa" strokeWidth={2} dot={false} connectNulls />
+                <Line type="monotone" dataKey="Assertiveness" stroke="#f87171" strokeWidth={2} dot={false} connectNulls />
+              </LineChart>
+            </ResponsiveContainer>
+          </div>
+          <div className="flex flex-wrap gap-2 text-[10px]">
+            <span className="text-amber-400">● Structure</span><span className="text-teal-400">● Specificity</span>
+            <span className="text-blue-400">● Vocabulary</span><span className="text-red-400">● Assertiveness</span>
+          </div>
+          <div className="space-y-1.5">
+            {sessions.slice().reverse().slice(0, 5).map((s, i) => (
+              <div key={i} className="p-2 rounded-lg bg-white/5 border border-white/5">
+                <div className="flex items-center gap-2 text-[10px] text-gray-500 mb-1">
+                  <span className="text-gray-300">{s.role || "Mock"}</span><span>{(s.date || "").slice(0, 10)}</span><span>· {s.source}</span>
+                </div>
+                <div className="flex flex-wrap gap-2 text-[10px] text-gray-400">
+                  {["structure", "specificity", "vocabulary", "assertiveness"].map(d => s.scores?.[d] != null && (
+                    <span key={d}>{d.slice(0, 4)}: <span className="text-gray-200">{s.scores[d]}</span></span>
+                  ))}
+                </div>
+                {(s.actions || []).length > 0 && <ul className="mt-1 space-y-0.5">{s.actions.slice(0, 3).map((a, j) => <li key={j} className="text-[10px] text-gray-500 flex gap-1"><span className="text-amber-400">→</span>{a}</li>)}</ul>}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function PrepNegotiate({ data, dispatch }) {
+  const roles = data.pipeline.roles || [];
+  const withCtc = roles.filter(r => r.ctcMin || r.ctcMax);
+  const [roleId, setRoleId] = useState(withCtc[0]?.id || "");
+  const role = roles.find(r => r.id === roleId) || null;
+  const sym = data.settings.currencySymbol || "₹";
+  const unit = data.settings.currencyUnit || "L";
+
+  if (withCtc.length === 0) {
+    return <EmptyState icon={DollarSign} title="No Comp Data" description="Add CTC ranges to roles in the Pipeline (or score a JD) to build a negotiation script." action="Go to Pipeline" onAction={() => dispatch({ type: "SET_ZONE", zone: "pipeline" })} />;
+  }
+
+  return (
+    <div className="space-y-3">
+      <label className="block">
+        <span className="text-[11px] text-gray-500 uppercase tracking-wider">Role</span>
+        <select value={roleId} onChange={e => setRoleId(e.target.value)} className="mt-1 w-full bg-black/30 rounded-lg px-2.5 py-2 text-sm text-white border border-white/5 focus:border-amber-500/30 focus:outline-none">
+          {withCtc.map(r => <option key={r.id} value={r.id}>{r.role} · {r.company}</option>)}
+        </select>
+      </label>
+
+      {role && (
+        <>
+          <div className="grid grid-cols-3 gap-2">
+            <StatCard label="Floor" value={role.walkAwayFloor ? `${sym}${role.walkAwayFloor}${unit}` : (role.ctcMin ? `${sym}${role.ctcMin}${unit}` : "—")} />
+            <StatCard label="Anchor" value={role.ctcMidpoint ? `${sym}${role.ctcMidpoint}${unit}` : "—"} sub="midpoint" />
+            <StatCard label="Target" value={role.ctcMax ? `${sym}${role.ctcMax}${unit}` : "—"} sub="push to" />
+          </div>
+          <div className="p-2.5 rounded-lg bg-white/5 border border-white/5 space-y-1 text-[11px] text-gray-400">
+            <div className="text-[10px] text-gray-500 uppercase tracking-wider mb-1">Script Anchors</div>
+            <p>• Open at <span className="text-gray-200">{role.ctcMax ? `${sym}${role.ctcMax}${unit}` : "market rate"}</span>, never volunteer current comp.</p>
+            <p>• Hold floor at <span className="text-gray-200">{sym}{role.walkAwayFloor || role.ctcMin || "?"}{unit}</span> — below that, walk.</p>
+            <p>• Deflect comp asks: "I'd prefer to focus on the value I bring and the market rate for this scope."</p>
+          </div>
+          <RawPromptPanel title="Negotiation Simulation (OP-05)" tool="ChatGPT" icon={DollarSign} dispatch={dispatch} text={buildOP05(role, data.settings)}
+            tip="Run the simulation in ChatGPT to practice holding your floor under pressure." />
+        </>
+      )}
+    </div>
+  );
+}
+
 function ZonePrep({ data, dispatch }) {
+  const [tab, setTab] = useState("stories");
   const storyCount = getStoryCount(data.stars);
+  const mapped = (data.stars.bqRouter || []).filter(r => r.primary).length;
+
+  const saveStars = async (next) => {
+    await saveData("stars", next);
+    dispatch({ type: "DATA_UPDATED", key: "stars", value: { ...next, lastUpdated: new Date().toISOString() } });
+  };
 
   return (
     <div className="p-4 space-y-4">
       <div>
         <h2 className="text-base font-semibold text-white">Prep Hub</h2>
-        <p className="text-xs text-gray-500 mt-0.5">Interview prep, mock practice, and negotiation</p>
+        <p className="text-xs text-gray-500 mt-0.5">{storyCount} stories · {mapped} BQ patterns mapped · {(data.stars.mockSessions || []).length} mocks</p>
       </div>
 
-      <div className="grid grid-cols-2 gap-3">
-        <StatCard label="Stories" value={storyCount} sub="available" icon={BookOpen} />
-        <StatCard label="BQ Patterns" value={data.stars.bqRouter?.length || 16} sub="mapped" icon={BarChart3} />
+      <div className="flex gap-1 bg-white/5 rounded-lg p-1">
+        {PREP_TABS.map(t => {
+          const Icon = t.icon;
+          return (
+            <button key={t.id} onClick={() => setTab(t.id)} className={`flex-1 flex items-center justify-center gap-1.5 py-2 rounded-md text-[11px] font-medium transition-colors ${tab === t.id ? "bg-amber-500/15 text-amber-400" : "text-gray-500 hover:text-gray-300"}`}>
+              <Icon size={13} /> {t.label}
+            </button>
+          );
+        })}
       </div>
 
-      <EmptyState
-        icon={Mic}
-        title="Interview Preparation"
-        description="BQ router, mock interview prompts, answer polishing, and negotiation practice. Build your STAR stories in Onboarding first."
-        action={storyCount === 0 ? "Build Stories First" : "Start Prepping"}
-        onAction={() => dispatch({ type: storyCount === 0 ? "SET_ZONE" : "SHOW_TOAST", zone: "onboard", message: "Prep Hub coming in Batch 5", toastType: "info" })}
-      />
+      {tab === "stories" && <PrepStories data={data} dispatch={dispatch} saveStars={saveStars} />}
+      {tab === "bq" && <PrepBQRouter data={data} dispatch={dispatch} saveStars={saveStars} />}
+      {tab === "mock" && <PrepMock data={data} dispatch={dispatch} />}
+      {tab === "negotiate" && <PrepNegotiate data={data} dispatch={dispatch} />}
     </div>
   );
 }
@@ -2697,6 +3146,19 @@ export default function CareerOS() {
         await saveData("stars", newStars);
         dispatch({ type: "DATA_UPDATED", key: "stars", value: { ...newStars, lastUpdated: new Date().toISOString() } });
         toastMsg = `Imported ${stories.length - before} new (${stories.length} total) stories ✓`;
+      } else if (type === "mock-results") {
+        const mock = parseMockResults(parsed.sections);
+        const now = new Date().toISOString();
+        const used = new Set(mock.questions.map(q => q.storyUsed).filter(Boolean));
+        const stories = (state.data.stars.stories || []).map(s =>
+          used.has(s.storyId)
+            ? { ...s, rehearsalCount: (s.rehearsalCount || 0) + 1, lastRehearsed: mock.date || now, rolesTested: mock.role && !(s.rolesTested || []).includes(mock.role) ? [...(s.rolesTested || []), mock.role] : (s.rolesTested || []) }
+            : s);
+        const session = { date: mock.date, role: mock.role, source: mock.source, questionsAsked: mock.questionsAsked, scores: mock.averages, actions: mock.actions };
+        const newStars = { ...state.data.stars, stories, mockSessions: [...(state.data.stars.mockSessions || []), session] };
+        await saveData("stars", newStars);
+        dispatch({ type: "DATA_UPDATED", key: "stars", value: { ...newStars, lastUpdated: now } });
+        toastMsg = `Mock logged · ${used.size} stories rehearsed ✓`;
       } else if (type === "red-team") {
         const rt = parseRedTeam(parsed.sections);
         const roles = state.data.pipeline.roles || [];
