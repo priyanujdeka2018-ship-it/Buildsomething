@@ -747,6 +747,251 @@ async function copyToClipboard(text) {
 }
 
 // ============================================================
+// SECTION 5B: ANALYZER PROMPT BUILDERS & PARSERS
+// ============================================================
+
+const SCORING_SCALE = {
+  "10": "perfect match or overqualified",
+  "8": "strong match with minor vocabulary gap",
+  "6": "solid transferable match requiring meaningful reframe",
+  "4": "partial match with genuine capability gap",
+  "2": "weak match requiring major skill acquisition",
+  "1": "no relevant experience",
+};
+
+const DIMENSION_NAMES = {
+  1: "Functional Alignment", 2: "Technical/Cert Prereqs", 3: "Leadership & Vocab",
+  4: "Programme Scale Match", 5: "Domain Relevance", 6: "AI/Portfolio Relevance",
+  7: "Stakeholder Altitude", 8: "Geographic/Mode Fit", 9: "Compensation Alignment",
+  10: "Career Trajectory Value",
+};
+
+function condensedProfile(p) {
+  const id = p.identity || {};
+  return {
+    name: id.name, title: id.currentTitle, employer: id.employer, employerDescription: id.employerDescription,
+    tenureStart: id.tenureStart, location: id.location, targetLocation: id.targetLocation,
+    teamSize: p.orgStructure?.totalHeadcount,
+    achievementStatement: p.achievementStatement,
+    transitionSummary: p.careerGoal?.transitionSummary,
+    coreReframe: p.careerGoal?.coreReframe,
+    aiDifferentiator: p.careerGoal?.aiDifferentiator,
+    targetFunctions: p.careerGoal?.targetFunctions,
+    targetIndustries: p.careerGoal?.targetIndustries,
+    headlineMetrics: (p.performanceMetrics?.headline || []).slice(0, 10).map(h => h.label || h.value).filter(Boolean),
+    operationalMetrics: (p.operationalMetrics || []).map(o => `${o.name}: ${o.before}→${o.after}`),
+    techStack: (p.technologyStack || []).map(t => t.platform).filter(Boolean),
+    education: (p.education || []).map(e => `${e.qualification}, ${e.institution} (${e.years})`),
+    psychometrics: p.psychometrics,
+  };
+}
+
+function buildAP01System(data) {
+  const s = data.settings;
+  return `You are a career fit scoring engine. You score job descriptions against a candidate's
+career profile using a 10-dimension weighted framework.
+
+SCORING METHOD:
+Each dimension: 1-10 scale.
+${JSON.stringify(s.scoringScale || SCORING_SCALE)}
+
+DIMENSION WEIGHTS:
+${JSON.stringify(s.scoringWeights)}
+
+BASE FIT = sum of (dimension_score × weight) / 100
+ADDRESSABLE FIT = base + gap-closure uplift (max +3 per dimension, only for actionable gaps)
+GAP = addressable - base
+
+STABILITY DISCOUNT: Apply -10 to net fit for pre-profit companies, <3yr history,
+active turnaround, or significant org instability. Format: "capability [X] - 10 = net [Y]"
+
+TRI-SCORE: Functional = dim 1, Technical/Cert = dim 2, Leadership/Vocab = dim 3
+
+SEGMENT RECOMMENDATION:
+${JSON.stringify(s.segmentCriteria)}
+
+CANDIDATE BASELINE:
+${JSON.stringify(condensedProfile(data.profile))}
+
+CANDIDATE STAR STORIES (titles only for mapping):
+${JSON.stringify((data.stars.stories || []).map(st => ({ storyId: st.storyId, title: st.title, category: st.category })))}
+
+CANDIDATE VOCABULARY TABLE:
+${JSON.stringify(data.vocab.mandatoryReframes || [])}
+
+CANDIDATE CERTIFICATIONS / SKILLS IN PROGRESS:
+${JSON.stringify((data.skills.tracks || []).map(t => ({ name: t.name, status: t.status })))}
+
+OUTPUT FORMAT — respond with ONLY this JSON, no prose:
+{
+  "role": "", "company": "", "location": "", "workMode": "", "slug": "",
+  "fitBase": 0, "fitTarget": 0, "fitGap": 0, "stabilityDiscount": 0, "fitNet": 0,
+  "subScores": { "functional": 0, "technicalCert": 0, "leadershipVocab": 0 },
+  "dimensionScores": [
+    { "dim": 1, "score": 0, "evidence": "", "upliftPossible": 0, "upliftAction": "" }
+  ],
+  "segmentRecommendation": "P3A|P3B|P3C",
+  "segmentReasoning": "",
+  "statusRecommendation": "",
+  "ctcEstimate": { "min": 0, "max": 0, "midpoint": 0, "confidence": "HIGH|MED|LOW", "currency": "${s.currency || "INR"}" },
+  "walkAwayFloor": 0,
+  "whatItIs": "", "top3Requirements": "", "reframeStrategy": "",
+  "gaps": [""], "certsNeeded": [""], "effortTier": "", "prepMonths": 0,
+  "suggestedStarIds": [""], "convProbability": "", "psych": "", "notes": ""
+}
+Include all 10 dimensions in dimensionScores.`;
+}
+
+function buildAP02System(data, scoreCard) {
+  return `You are a career playbook builder. You produce a single-page HTML playbook for a job
+application. The playbook is a comprehensive preparation document.
+
+PLAYBOOK SECTIONS (10 core + 2 conditional, in order):
+01 · Snapshot — stat grid (Net Fit, Status, Conv Probability, Target CTC) + one-line thesis
+02 · Role Decode — what the role actually is, JD requirements decoded, vocabulary translation table
+03 · Fit & Gap — 10-dimension scoring detail with evidence per dimension + tri-score
+04 · STAR Mapping — exactly 5 stories mapped to role requirements with S-codes + BQ router table
+05 · 30·60·90 Plan — first 90 days structured plan
+06 · AI Differentiator — how AI/automation portfolio maps to role
+07 · Interview Kit — 20+ predicted questions with story routing + coaching notes
+08 · Comp Intel — CTC band with sources, walk-away floor, negotiation anchors
+09 · Cert Roadmap — required/preferred/nice-to-have certs with timeline
+10 · Close & Outreach — application strategy, referral paths, cover letter hooks
+
+Conditional: !! Risk & Red Flags (if instability); ++ Stakeholder Decode (if hiring manager known).
+
+DENSITY FLOORS: JD requirements ≥9, vocabulary translations ≥15, gaps 3-5, STAR stories exactly 5,
+AI portfolio projects ≥3, timeline items ≥15, interview questions ≥20, total content cards ≥60.
+
+DESIGN RULES:
+- Single HTML file, no external dependencies except Google Fonts
+- Brand-derived palette from the target company
+- Left-rail vertical tab navigation; Mobile <768px: tabs become dropdown
+- No horizontal table scroll
+
+CANDIDATE DATA:
+${JSON.stringify(data.profile)}
+
+STAR STORIES:
+${JSON.stringify(data.stars.stories || [])}
+
+VOCABULARY TABLE:
+${JSON.stringify(data.vocab)}
+
+ROLE SCORES:
+${JSON.stringify(scoreCard)}
+
+POSITIONING ANCHORS:
+Core reframe: ${data.profile.careerGoal?.coreReframe || ""}
+AI differentiator: ${data.profile.careerGoal?.aiDifferentiator || ""}
+Psychometrics: ${JSON.stringify(data.profile.psychometrics || {})}
+
+Produce the complete HTML file. No code fences — raw HTML only.`;
+}
+
+function buildOP06(roleTitle, company, artifactType, artifactContent) {
+  return `You are a skeptical hiring manager at ${company || "the company"} reviewing this candidate's
+${artifactType} for the ${roleTitle || "role"} role. Your job is to find weaknesses,
+not validate strengths.
+
+${artifactContent}
+
+EVALUATE:
+1. GAPS FOUND: What would make you skeptical? Where does the positioning feel
+   generic vs. genuinely differentiated? What follow-up questions would expose a weakness?
+2. SUGGESTED STRENGTHENING: For each gap, suggest a specific fix referencing the artifact.
+3. RED FLAGS: Any vocabulary slips, inflated claims, or missing proof points.
+
+Format your output as:
+
+<!-- COS_IMPORT zone:3 type:red-team date:${todayStr()} -->
+
+## RED_TEAM_RESULTS
+role: ${roleTitle || ""} at ${company || ""}
+source: chatgpt
+date: ${todayStr()}
+
+## GAPS_FOUND
+- [gap 1]
+- [gap 2]
+
+## SUGGESTED_STRENGTHENING
+- [fix 1]
+- [fix 2]
+
+## RED_FLAGS
+- [flag 1]
+- [flag 2]`;
+}
+
+function parseJsonResponse(text) {
+  let t = (text || "").trim();
+  const fence = t.match(/```(?:json)?\s*([\s\S]*?)```/);
+  if (fence) t = fence[1].trim();
+  const start = t.indexOf("{"), end = t.lastIndexOf("}");
+  if (start >= 0 && end > start) t = t.slice(start, end + 1);
+  return JSON.parse(t);
+}
+
+function makeRoleFromScore(score, jdText, settings, playbookBuilt) {
+  const now = new Date().toISOString();
+  const fitBase = Number(score.fitBase) || 0;
+  const fitTarget = Number(score.fitTarget) || fitBase;
+  const fitGap = Number(score.fitGap) || Math.max(0, fitTarget - fitBase);
+  const segment = score.segmentRecommendation || computeSegment(fitTarget, fitGap, settings.segmentCriteria);
+  const ctc = score.ctcEstimate || {};
+  const dims = (score.dimensionScores || []).map(d => ({
+    dim: d.dim, name: DIMENSION_NAMES[d.dim] || `Dim ${d.dim}`, score: d.score || 0, evidence: d.evidence || "",
+  }));
+  return {
+    id: score.slug || slugify(score.company, score.role),
+    role: score.role || "", company: score.company || "",
+    division: "", cluster: "", location: score.location || "", workMode: score.workMode || "remote",
+    segment, status: score.statusRecommendation || "EXPLORATORY", applicationStatus: "BUILD",
+    statusReason: null, boundaryException: null,
+    fitBase, fitTarget, fitGap,
+    stabilityDiscount: Number(score.stabilityDiscount) || 0,
+    fitNet: Number(score.fitNet) || fitBase,
+    subScores: score.subScores || { functional: 0, technicalCert: 0, leadershipVocab: 0 },
+    dimensionScores: dims,
+    ctcMin: Number(ctc.min) || 0, ctcMax: Number(ctc.max) || 0, ctcMidpoint: Number(ctc.midpoint) || 0,
+    ctcCurrency: ctc.currency || settings.currency || "INR", ctcConfidence: ctc.confidence || "LOW",
+    walkAwayFloor: Number(score.walkAwayFloor) || 0,
+    prepMonths: Number(score.prepMonths) || 0, effortTier: score.effortTier || "MODERATE",
+    whatItIs: score.whatItIs || "", top3Requirements: score.top3Requirements || "",
+    reframeStrategy: score.reframeStrategy || "",
+    gaps: Array.isArray(score.gaps) ? score.gaps.join("; ") : (score.gaps || ""),
+    certs: Array.isArray(score.certsNeeded) ? score.certsNeeded.join("; ") : (score.certsNeeded || ""),
+    psych: score.psych || "",
+    starIds: score.suggestedStarIds || [], aiProjects: [], portfolioRelevance: "",
+    resumeStatus: "PENDING", resumeVersion: null,
+    playbookStatus: playbookBuilt ? "BUILT" : "PENDING", coverNoteStatus: "PENDING",
+    stageTracker: { currentStage: playbookBuilt ? "PLAYBOOKED" : "RESEARCHED", lastUpdated: now, history: [{ stage: "RESEARCHED", date: now, note: "Scored via JD Analyzer" }] },
+    referrals: [], redTeamFindings: [],
+    intakeDate: now, lastScored: now, lastActivity: now,
+    jdUrl: "", jdText: jdText || "", notes: score.notes || "",
+  };
+}
+
+function parseRedTeam(sections) {
+  const meta = parseMdKeyValues(sections.RED_TEAM_RESULTS || "");
+  const gaps = parseMdList(sections.GAPS_FOUND || "");
+  const strengthening = parseMdList(sections.SUGGESTED_STRENGTHENING || "");
+  const flags = parseMdList(sections.RED_FLAGS || "");
+  const parts = [];
+  if (gaps.length) parts.push("GAPS:\n- " + gaps.join("\n- "));
+  if (strengthening.length) parts.push("STRENGTHENING:\n- " + strengthening.join("\n- "));
+  if (flags.length) parts.push("RED FLAGS:\n- " + flags.join("\n- "));
+  return {
+    role: meta.role || "",
+    source: meta.source || "chatgpt",
+    date: meta.date || todayStr(),
+    findings: parts.join("\n\n"),
+    gaps, strengthening, flags,
+  };
+}
+
+// ============================================================
 // SECTION 6: APP REDUCER
 // ============================================================
 
@@ -1812,6 +2057,26 @@ function RoleDrawer({ role, data, settings, onMove, onUpdate, onDelete, onClose 
             )}
           </div>
 
+          {/* Red team findings */}
+          {(role.redTeamFindings || []).length > 0 && (
+            <div>
+              <div className="text-[11px] text-gray-500 uppercase tracking-wider mb-1.5">Red Team Findings ({role.redTeamFindings.length})</div>
+              <div className="space-y-1.5">
+                {role.redTeamFindings.map((f, i) => (
+                  <div key={i} className="p-2 rounded-lg bg-red-500/5 border border-red-500/15">
+                    <div className="flex items-center gap-2 mb-1 text-[10px] text-gray-500">
+                      <span className="text-red-400">{f.source}</span><span>{(f.date || "").slice(0, 10)}</span>
+                      {f.addressed && <Badge variant="green">addressed</Badge>}
+                    </div>
+                    <pre className="text-[10px] text-gray-400 whitespace-pre-wrap leading-relaxed" style={{ fontFamily: "inherit" }}>{f.findings}</pre>
+                    <button onClick={() => onUpdate(role.id, { redTeamFindings: role.redTeamFindings.map((x, j) => j === i ? { ...x, addressed: !x.addressed } : x) })}
+                      className="mt-1 text-[10px] text-gray-500 hover:text-emerald-400">{f.addressed ? "Mark unaddressed" : "Mark addressed"}</button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
           {/* Editable details */}
           <div className="space-y-2">
             <Area label="What it is" value={role.whatItIs} onChange={v => onUpdate(role.id, { whatItIs: v })} rows={2} placeholder="One-line description of the role" />
@@ -1962,21 +2227,243 @@ function ZonePipeline({ data, dispatch }) {
   );
 }
 
+function ScoreBar({ score, max = 10 }) {
+  const pct = Math.min(100, Math.round((Number(score) / max) * 100));
+  const color = score >= 8 ? "bg-emerald-400" : score >= 6 ? "bg-teal-400" : score >= 4 ? "bg-amber-400" : "bg-red-400";
+  return <div className="h-1.5 rounded-full bg-white/5 overflow-hidden"><div className={`h-full rounded-full ${color}`} style={{ width: `${pct}%` }} /></div>;
+}
+
+function ScoreCard({ score, settings }) {
+  const sym = settings.currencySymbol || "₹";
+  const unit = settings.currencyUnit || "L";
+  const ctc = score.ctcEstimate || {};
+  const tri = score.subScores || {};
+  return (
+    <div className="space-y-4">
+      {/* Headline */}
+      <div className="flex items-center gap-3 p-3 rounded-lg bg-white/5 border border-white/5">
+        <div className="text-center">
+          <div className="text-3xl font-bold text-amber-400 leading-none">{score.fitNet ?? score.fitBase ?? 0}</div>
+          <div className="text-[9px] text-gray-500 uppercase tracking-wider mt-1">Net Fit</div>
+        </div>
+        <div className="flex-1 text-[11px] text-gray-400 leading-relaxed">
+          <div className="flex items-center gap-1.5 mb-1">
+            <Badge variant={score.segmentRecommendation === "P3A" ? "teal" : score.segmentRecommendation === "P3B" ? "blue" : "default"}>{score.segmentRecommendation}</Badge>
+            {score.fitGap > 0 && <span className="text-gray-500">base {score.fitBase} → addressable {score.fitTarget} (gap +{score.fitGap})</span>}
+          </div>
+          {score.segmentReasoning && <p className="text-gray-500">{score.segmentReasoning}</p>}
+        </div>
+      </div>
+
+      {/* Tri-score + CTC */}
+      <div className="grid grid-cols-4 gap-2">
+        <StatCard label="Functional" value={tri.functional ?? "—"} />
+        <StatCard label="Tech/Cert" value={tri.technicalCert ?? "—"} />
+        <StatCard label="Lead/Vocab" value={tri.leadershipVocab ?? "—"} />
+        <StatCard label="CTC" value={ctc.min || ctc.max ? `${sym}${ctc.min}–${ctc.max}${unit}` : "—"} sub={ctc.confidence} />
+      </div>
+
+      {/* Dimensions */}
+      <div>
+        <div className="text-[11px] text-gray-500 uppercase tracking-wider mb-2">10-Dimension Detail</div>
+        <div className="space-y-2.5">
+          {(score.dimensionScores || []).map(d => (
+            <div key={d.dim} className="space-y-1">
+              <div className="flex items-center justify-between text-[11px]">
+                <span className="text-gray-300">{d.dim}. {DIMENSION_NAMES[d.dim] || `Dim ${d.dim}`}</span>
+                <span className="text-gray-400 font-medium">{d.score}/10{d.upliftPossible ? <span className="text-teal-400"> +{d.upliftPossible}</span> : null}</span>
+              </div>
+              <ScoreBar score={d.score} />
+              {d.evidence && <p className="text-[10px] text-gray-600 leading-relaxed">{d.evidence}</p>}
+              {d.upliftAction && <p className="text-[10px] text-teal-500/80 leading-relaxed">↑ {d.upliftAction}</p>}
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Gaps / certs / stories */}
+      {(score.gaps?.length > 0) && (
+        <div>
+          <div className="text-[11px] text-gray-500 uppercase tracking-wider mb-1.5">Gaps</div>
+          <ul className="space-y-1">{(score.gaps || []).map((g, i) => <li key={i} className="text-[11px] text-gray-400 flex gap-1.5"><span className="text-amber-400">•</span>{g}</li>)}</ul>
+        </div>
+      )}
+      <div className="grid grid-cols-2 gap-3">
+        {score.certsNeeded?.length > 0 && (
+          <div><div className="text-[11px] text-gray-500 uppercase tracking-wider mb-1.5">Certs</div><div className="flex flex-wrap gap-1">{score.certsNeeded.map((c, i) => <Badge key={i}>{c}</Badge>)}</div></div>
+        )}
+        {score.suggestedStarIds?.length > 0 && (
+          <div><div className="text-[11px] text-gray-500 uppercase tracking-wider mb-1.5">Suggested Stories</div><div className="flex flex-wrap gap-1">{score.suggestedStarIds.map((s, i) => <Badge key={i} variant="amber">{s}</Badge>)}</div></div>
+        )}
+      </div>
+      {(score.effortTier || score.prepMonths || score.convProbability) && (
+        <div className="flex flex-wrap gap-2 text-[11px] text-gray-500">
+          {score.effortTier && <span>Effort: <span className="text-gray-300">{score.effortTier}</span></span>}
+          {score.prepMonths ? <span>Prep: <span className="text-gray-300">{score.prepMonths}mo</span></span> : null}
+          {score.convProbability && <span>Conversion: <span className="text-gray-300">{score.convProbability}</span></span>}
+        </div>
+      )}
+      {score.notes && <p className="text-[11px] text-gray-600 leading-relaxed border-t border-white/5 pt-2">{score.notes}</p>}
+    </div>
+  );
+}
+
 function ZoneAnalyzer({ data, dispatch }) {
+  const [jdText, setJdText] = useState("");
+  const [scoring, setScoring] = useState(false);
+  const [score, setScore] = useState(null);
+  const [building, setBuilding] = useState(false);
+  const [playbook, setPlaybook] = useState(null);
+  const [saved, setSaved] = useState(false);
+  const [redTeam, setRedTeam] = useState(null);
+  const [rtCopied, setRtCopied] = useState(false);
+  const [error, setError] = useState(null);
+
+  const profileReady = !!data.profile.identity?.name;
+
+  const runScore = async () => {
+    if (!jdText.trim()) return;
+    setScoring(true); setError(null); setScore(null); setPlaybook(null); setSaved(false); setRedTeam(null);
+    try {
+      const res = await callClaudeAPI({ systemPrompt: buildAP01System(data), userMessage: `Score this JD:\n\n${jdText}`, maxTokens: 2500 });
+      setScore(parseJsonResponse(res.text));
+    } catch (err) {
+      setError("Scoring failed: " + (err?.message || err) + ". Inside Claude.ai the API is available automatically.");
+    }
+    setScoring(false);
+  };
+
+  const buildPlaybook = async () => {
+    if (!score) return;
+    setBuilding(true); setError(null);
+    try {
+      const res = await callClaudeAPI({ systemPrompt: buildAP02System(data, score), userMessage: `Build playbook for: ${score.role} at ${score.company}\n\nJD:\n${jdText}`, maxTokens: 8000 });
+      let html = (res.text || "").trim();
+      const fence = html.match(/```(?:html)?\s*([\s\S]*?)```/);
+      if (fence) html = fence[1].trim();
+      setPlaybook(html);
+      dispatch({ type: "SHOW_TOAST", message: "Playbook generated", toastType: "success" });
+    } catch (err) {
+      setError("Playbook generation failed: " + (err?.message || err));
+    }
+    setBuilding(false);
+  };
+
+  const saveToPipeline = async () => {
+    if (!score) return;
+    const roles = data.pipeline.roles || [];
+    const role = makeRoleFromScore(score, jdText, data.settings, !!playbook);
+    if (roles.some(r => r.id === role.id)) role.id = role.id + "-" + Date.now().toString(36);
+    const next = { ...data.pipeline, roles: [...roles, role] };
+    await saveData("pipeline", next);
+    dispatch({ type: "DATA_UPDATED", key: "pipeline", value: { ...next, lastUpdated: new Date().toISOString() } });
+    setSaved(true);
+    dispatch({ type: "SHOW_TOAST", message: `Saved to pipeline → ${role.segment}`, toastType: "success" });
+  };
+
+  const genRedTeam = async () => {
+    const artifactType = playbook ? "playbook" : "fit assessment";
+    const content = playbook
+      ? playbook.replace(/<style[\s\S]*?<\/style>/gi, "").replace(/<script[\s\S]*?<\/script>/gi, "").replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim().slice(0, 6000)
+      : JSON.stringify(score, null, 2);
+    const prompt = buildOP06(score?.role, score?.company, artifactType, content);
+    setRedTeam(prompt);
+    const ok = await copyToClipboard(prompt);
+    setRtCopied(true); setTimeout(() => setRtCopied(false), 2000);
+    if (ok) dispatch({ type: "SHOW_TOAST", message: "Red Team prompt copied", toastType: "success" });
+  };
+
+  const downloadPlaybook = () => {
+    const blob = new Blob([playbook], { type: "text/html" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url; a.download = `${(score?.slug || score?.company || "playbook")}.html`; a.click();
+    URL.revokeObjectURL(url);
+  };
+
   return (
     <div className="p-4 space-y-4">
       <div>
         <h2 className="text-base font-semibold text-white">JD Analyzer</h2>
-        <p className="text-xs text-gray-500 mt-0.5">Score job descriptions and generate playbooks</p>
+        <p className="text-xs text-gray-500 mt-0.5">Score a job description, then build a playbook</p>
       </div>
 
-      <EmptyState
-        icon={FileSearch}
-        title="Paste a Job Description"
-        description="The analyzer will score it against your career profile using 10 dimensions, then generate a full preparation playbook."
-        action="Score a JD"
-        onAction={() => dispatch({ type: "SHOW_TOAST", message: "JD Analyzer coming in Batch 4", toastType: "info" })}
+      {!profileReady && (
+        <div className="flex items-center gap-2 p-2.5 rounded-lg bg-amber-500/10 border border-amber-500/20 text-[11px] text-amber-300">
+          <AlertCircle size={14} /> Complete onboarding first — scoring needs your career profile.
+        </div>
+      )}
+
+      <textarea
+        value={jdText}
+        onChange={e => setJdText(e.target.value)}
+        placeholder="Paste the full job description here..."
+        className="w-full h-36 bg-black/30 rounded-lg p-3 text-xs text-gray-300 border border-white/5 focus:border-amber-500/30 focus:outline-none resize-none leading-relaxed"
       />
+
+      <div className="flex gap-2">
+        <button onClick={runScore} disabled={scoring || !jdText.trim() || !profileReady}
+          className="flex-1 flex items-center justify-center gap-1.5 py-2.5 text-xs font-medium rounded-lg bg-amber-500/15 text-amber-400 hover:bg-amber-500/25 transition-colors disabled:opacity-30 disabled:cursor-not-allowed">
+          {scoring ? <Loader2 size={14} className="animate-spin" /> : <BarChart3 size={14} />}
+          {scoring ? "Scoring…" : "Score JD"}
+        </button>
+        {score && (
+          <button onClick={saveToPipeline} disabled={saved}
+            className="flex items-center justify-center gap-1.5 px-3 py-2.5 text-xs font-medium rounded-lg bg-teal-500/15 text-teal-400 hover:bg-teal-500/25 transition-colors disabled:opacity-40">
+            {saved ? <Check size={14} /> : <Target size={14} />}{saved ? "Saved" : "Save"}
+          </button>
+        )}
+      </div>
+
+      {error && (
+        <div className="flex items-start gap-2 p-2.5 rounded-lg bg-red-500/10 border border-red-500/20 text-[11px] text-red-300">
+          <AlertCircle size={14} className="shrink-0 mt-0.5" /> <span>{error}</span>
+        </div>
+      )}
+
+      {score && (
+        <div className="space-y-4 border-t border-white/5 pt-4">
+          <div className="flex items-center justify-between">
+            <h3 className="text-sm font-semibold text-white">{score.role || "Role"} {score.company ? `· ${score.company}` : ""}</h3>
+          </div>
+          <ScoreCard score={score} settings={data.settings} />
+
+          <div className="flex gap-2">
+            <button onClick={buildPlaybook} disabled={building}
+              className="flex-1 flex items-center justify-center gap-1.5 py-2.5 text-xs font-medium rounded-lg bg-white/5 text-gray-200 hover:bg-white/10 transition-colors disabled:opacity-40">
+              {building ? <Loader2 size={14} className="animate-spin" /> : <FileText size={14} />}
+              {building ? "Building…" : playbook ? "Regenerate Playbook" : "Generate Playbook"}
+            </button>
+            <button onClick={genRedTeam}
+              className="flex items-center justify-center gap-1.5 px-3 py-2.5 text-xs font-medium rounded-lg bg-white/5 text-gray-300 hover:bg-white/10 transition-colors">
+              {rtCopied ? <Check size={14} /> : <AlertTriangle size={14} />} Red Team
+            </button>
+          </div>
+
+          {redTeam && (
+            <div className="rounded-lg bg-white/5 border border-white/5 overflow-hidden">
+              <div className="flex items-center gap-2 px-3 py-2 border-b border-white/5">
+                <AlertTriangle size={13} className="text-amber-400" />
+                <span className="text-xs font-medium text-gray-200 flex-1">Red Team Prompt (OP-06)</span>
+                <button onClick={() => copyToClipboard(redTeam)} className="text-[10px] text-amber-400 hover:text-amber-300 flex items-center gap-1"><Copy size={11} />Copy</button>
+                <button onClick={() => dispatch({ type: "OPEN_IMPORT" })} className="text-[10px] text-gray-400 hover:text-gray-200 flex items-center gap-1"><Upload size={11} />Import</button>
+              </div>
+              <pre className="px-3 py-2 max-h-32 overflow-auto text-[10px] text-gray-400 whitespace-pre-wrap" style={{ fontFamily: "ui-monospace, monospace" }}>{redTeam}</pre>
+              <div className="px-3 pb-2 text-[10px] text-gray-600">Paste into ChatGPT, then import the red-team .md to attach findings to this role in the pipeline.</div>
+            </div>
+          )}
+
+          {playbook && (
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <span className="text-[11px] text-gray-500 uppercase tracking-wider">Playbook</span>
+                <button onClick={downloadPlaybook} className="text-[10px] text-teal-400 hover:text-teal-300 flex items-center gap-1"><Download size={11} />Download .html</button>
+              </div>
+              <iframe srcDoc={playbook} title="Playbook" className="w-full h-[560px] rounded-lg border border-white/10 bg-white" sandbox="allow-scripts" />
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -2210,8 +2697,23 @@ export default function CareerOS() {
         await saveData("stars", newStars);
         dispatch({ type: "DATA_UPDATED", key: "stars", value: { ...newStars, lastUpdated: new Date().toISOString() } });
         toastMsg = `Imported ${stories.length - before} new (${stories.length} total) stories ✓`;
+      } else if (type === "red-team") {
+        const rt = parseRedTeam(parsed.sections);
+        const roles = state.data.pipeline.roles || [];
+        if (roles.length === 0) throw new Error("Add a role to the pipeline before importing red-team findings");
+        const needle = (rt.role || "").toLowerCase();
+        const match = roles.find(r => needle && (needle.includes((r.role || "").toLowerCase()) || (r.company && needle.includes(r.company.toLowerCase()))))
+          || roles.slice().sort((a, b) => new Date(b.lastActivity || 0) - new Date(a.lastActivity || 0))[0];
+        const finding = { source: rt.source, date: rt.date, findings: rt.findings, addressed: false };
+        const nextRoles = roles.map(r => r.id === match.id
+          ? { ...r, redTeamFindings: [...(r.redTeamFindings || []), finding], lastActivity: new Date().toISOString() }
+          : r);
+        const nextPipeline = { ...state.data.pipeline, roles: nextRoles };
+        await saveData("pipeline", nextPipeline);
+        dispatch({ type: "DATA_UPDATED", key: "pipeline", value: { ...nextPipeline, lastUpdated: new Date().toISOString() } });
+        toastMsg = `Red-team findings → ${match.role || match.company} ✓`;
       } else {
-        // Zones 3/4/5 — retain raw import; zone-specific parsers land in later batches.
+        // Zones 4/5 — retain raw import; zone-specific parsers land in later batches.
         const key = importType.targetKey;
         const currentData = state.data[key];
         const updatedData = {
