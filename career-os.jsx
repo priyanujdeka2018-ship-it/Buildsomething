@@ -3,7 +3,8 @@ import {
   Briefcase, Target, FileSearch, Mic, GraduationCap, Settings,
   Upload, Download, Trash2, ChevronRight, ChevronLeft, Check, AlertCircle,
   Loader2, X, FileText, Plus, BarChart3, BookOpen,
-  Copy, Sparkles, Users, Brain, ListChecks, ArrowRight
+  Copy, Sparkles, Users, Brain, ListChecks, ArrowRight,
+  Clock, Building2, MapPin, AlertTriangle
 } from "lucide-react";
 
 // ============================================================
@@ -819,6 +820,145 @@ function getTrackCount(skills) { return skills?.tracks?.length || 0; }
 function getActiveTrackCount(skills) { return skills?.tracks?.filter(t => t.status === "ACTIVE").length || 0; }
 
 // ============================================================
+// SECTION 7B: PIPELINE HELPERS
+// ============================================================
+
+const PIPELINE_COLUMNS = [
+  { id: "watch", label: "Watch", sub: "P3C", kind: "segment", segment: "P3C", accent: "default" },
+  { id: "tracking", label: "Tracking", sub: "P3B", kind: "segment", segment: "P3B", accent: "blue", capKey: "P3B" },
+  { id: "promotion", label: "Promotion", sub: "P3A", kind: "segment", segment: "P3A", accent: "teal" },
+  { id: "active", label: "Active", sub: "P2", kind: "segment", segment: "P2", accent: "amber", capKey: "P2" },
+  { id: "submitted", label: "Submitted", kind: "status", status: "SUBMITTED", accent: "blue" },
+  { id: "interview", label: "Interview", kind: "status", status: "INTERVIEW", accent: "teal" },
+  { id: "complete", label: "Complete", kind: "status", status: "COMPLETE", accent: "green" },
+];
+
+function roleColumn(role) {
+  const st = role.applicationStatus;
+  if (st === "COMPLETE") return "complete";
+  if (st === "INTERVIEW") return "interview";
+  if (st === "SUBMITTED") return "submitted";
+  return ({ P2: "active", P3A: "promotion", P3B: "tracking", P3C: "watch" })[role.segment] || "watch";
+}
+
+function slugify(company, role) {
+  return [company, role].filter(Boolean).join("-").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 60) || "role-" + Date.now();
+}
+
+function computeSegment(fitTarget, fitGap, sc = {}) {
+  const a = Number(fitTarget) || 0, g = Number(fitGap) || 0;
+  const p3a = sc.P3A || {}, p3b = sc.P3B || {};
+  if (a >= (p3a.minAddressable ?? 80) && g <= (p3a.maxGap ?? 10)) return "P3A";
+  if (a >= (p3b.minAddressable ?? 70)) return "P3B";
+  return "P3C";
+}
+
+function getStaleness(role, settings) {
+  const ref = role.lastActivity || role.intakeDate || role.lastScored;
+  if (!ref) return { stale: false, weeks: 0 };
+  const weeks = Math.floor((Date.now() - new Date(ref).getTime()) / (7 * 864e5));
+  const sw = settings.stalenessWeeks || {};
+  const thr = roleColumn(role) === "submitted" ? sw.P2_submitted : sw[role.segment];
+  if (!thr) return { stale: false, weeks };
+  return { stale: weeks >= thr, weeks };
+}
+
+// Counts only roles that live in a given column (excludes one role by id).
+function columnCount(roles, colId, excludeId) {
+  return roles.filter(r => r.id !== excludeId && roleColumn(r) === colId).length;
+}
+
+// Capacity gate for a target column move. Returns { ok, warn, message }.
+function checkCapacity(roles, col, settings, movingId) {
+  if (!col.capKey) return { ok: true };
+  const caps = settings.capacityCaps || {};
+  const cap = caps[col.capKey];
+  if (!cap) return { ok: true };
+  const next = columnCount(roles, col.id, movingId) + 1;
+  if (next <= cap) return { ok: true };
+  const overflow = next - cap;
+  if (col.capKey === "P2") {
+    return { ok: false, message: `Active (P2) is at capacity (${cap}). Demote a lower-fit role before promoting.` };
+  }
+  // P3B: tolerate small overflow with a flag, block beyond escalation.
+  const tol = caps.overflowTolerance ?? 2;
+  if (overflow > tol) return { ok: false, message: `Tracking (P3B) overflow of ${overflow} exceeds limit. Kill or promote a role first.` };
+  return { ok: true, warn: true, message: `Tracking (P3B) over cap by ${overflow}. Resolve by next weekly refresh.` };
+}
+
+function ctcRange(role, settings) {
+  const sym = settings.currencySymbol || "₹";
+  const unit = settings.currencyUnit || "L";
+  if (!role.ctcMin && !role.ctcMax) return null;
+  if (role.ctcMin && role.ctcMax) return `${sym}${role.ctcMin}–${role.ctcMax}${unit}`;
+  return `${sym}${role.ctcMin || role.ctcMax}${unit}`;
+}
+
+function fitVariant(score) {
+  const s = Number(score) || 0;
+  if (s >= 80) return "green";
+  if (s >= 70) return "teal";
+  if (s >= 60) return "amber";
+  return "default";
+}
+
+function makeRole(input, settings) {
+  const now = new Date().toISOString();
+  const fitBase = Number(input.fitBase) || 0;
+  const fitTarget = Number(input.fitTarget) || fitBase;
+  const fitGap = Math.max(0, fitTarget - fitBase);
+  const segment = input.segment || computeSegment(fitTarget, fitGap, settings.segmentCriteria);
+  return {
+    id: slugify(input.company, input.role),
+    role: input.role || "",
+    company: input.company || "",
+    division: "", cluster: "",
+    location: input.location || "",
+    workMode: input.workMode || "remote",
+    segment,
+    status: "EXPLORATORY",
+    applicationStatus: "BUILD",
+    statusReason: null,
+    boundaryException: null,
+    fitBase, fitTarget, fitGap,
+    stabilityDiscount: 0,
+    fitNet: fitBase,
+    subScores: { functional: 0, technicalCert: 0, leadershipVocab: 0 },
+    dimensionScores: [],
+    ctcMin: Number(input.ctcMin) || 0,
+    ctcMax: Number(input.ctcMax) || 0,
+    ctcMidpoint: Number(input.ctcMin && input.ctcMax ? (Number(input.ctcMin) + Number(input.ctcMax)) / 2 : 0),
+    ctcCurrency: settings.currency || "INR",
+    ctcConfidence: "LOW",
+    walkAwayFloor: 0,
+    prepMonths: 0,
+    effortTier: "MODERATE",
+    whatItIs: input.whatItIs || "",
+    top3Requirements: "",
+    reframeStrategy: "",
+    gaps: input.gaps || "",
+    certs: "",
+    psych: "",
+    starIds: [],
+    aiProjects: [],
+    portfolioRelevance: "",
+    resumeStatus: "PENDING",
+    resumeVersion: null,
+    playbookStatus: "PENDING",
+    coverNoteStatus: "PENDING",
+    stageTracker: { currentStage: "IDENTIFIED", lastUpdated: now, history: [{ stage: "IDENTIFIED", date: now, note: "Added manually" }] },
+    referrals: [],
+    redTeamFindings: [],
+    intakeDate: now,
+    lastScored: input.fitBase ? now : null,
+    lastActivity: now,
+    jdUrl: input.jdUrl || "",
+    jdText: input.jdText || "",
+    notes: input.notes || "",
+  };
+}
+
+// ============================================================
 // SECTION 8: SHARED UI COMPONENTS
 // ============================================================
 
@@ -1484,31 +1624,339 @@ function StoryBuilder({ stories, categoryEnum, onChange }) {
   );
 }
 
+function ArtifactDots({ role }) {
+  const dot = status => {
+    const c = status === "BUILT" ? "bg-emerald-400" : status === "DEFERRED" ? "bg-amber-400" : "bg-gray-700";
+    return <span className={`w-1.5 h-1.5 rounded-full ${c}`} />;
+  };
+  return (
+    <div className="flex items-center gap-1" title="Resume · Playbook · Cover note">
+      {dot(role.resumeStatus)}{dot(role.playbookStatus)}{dot(role.coverNoteStatus)}
+    </div>
+  );
+}
+
+function RoleCard({ role, settings, onOpen }) {
+  const fit = role.fitNet || role.fitBase || 0;
+  const target = role.fitTarget || fit;
+  const ctc = ctcRange(role, settings);
+  const { stale, weeks } = getStaleness(role, settings);
+  return (
+    <button onClick={onOpen} className="w-full text-left p-2.5 rounded-lg bg-white/5 border border-white/5 hover:border-amber-500/20 transition-colors space-y-1.5">
+      <div className="flex items-start gap-2">
+        <div className="flex-1 min-w-0">
+          <div className="text-xs font-medium text-gray-200 truncate">{role.role || "Untitled role"}</div>
+          <div className="text-[10px] text-gray-500 truncate">{role.company}</div>
+        </div>
+        <Badge variant={fitVariant(target)}>{target}{target !== fit ? <span className="opacity-60"> ←{fit}</span> : null}</Badge>
+      </div>
+      <div className="flex items-center gap-2 flex-wrap">
+        {ctc && <span className="text-[10px] text-gray-400">{ctc}</span>}
+        {role.fitGap > 0 && <span className="text-[10px] text-gray-500">gap +{role.fitGap}</span>}
+        <ArtifactDots role={role} />
+        {stale && (
+          <span className="inline-flex items-center gap-0.5 text-[9px] text-amber-400 bg-amber-500/10 px-1.5 py-0.5 rounded">
+            <Clock size={9} /> {weeks}w
+          </span>
+        )}
+      </div>
+    </button>
+  );
+}
+
+function AddRoleSheet({ open, onClose, onAdd, settings }) {
+  const blank = { role: "", company: "", location: "", workMode: "remote", ctcMin: "", ctcMax: "", fitBase: "", fitTarget: "", gaps: "", jdUrl: "", notes: "" };
+  const [form, setForm] = useState(blank);
+  useEffect(() => { if (open) setForm(blank); }, [open]); // eslint-disable-line react-hooks/exhaustive-deps
+  if (!open) return null;
+  const set = patch => setForm(f => ({ ...f, ...patch }));
+  const seg = computeSegment(form.fitTarget || form.fitBase, Math.max(0, (Number(form.fitTarget) || 0) - (Number(form.fitBase) || 0)), settings.segmentCriteria);
+  const submit = () => {
+    if (!form.role && !form.company) { onClose(); return; }
+    onAdd(makeRole(form, settings));
+    onClose();
+  };
+  return (
+    <div className="fixed inset-0 z-40 bg-black/60 flex items-end justify-center" onClick={onClose}>
+      <div className="bg-gray-900 rounded-t-xl w-full max-w-lg max-h-[85vh] flex flex-col border-t border-white/10" onClick={e => e.stopPropagation()}>
+        <div className="flex items-center justify-between p-3 border-b border-white/5">
+          <h3 className="text-sm font-medium text-white">Add Role</h3>
+          <button onClick={onClose} className="p-1 text-gray-500 hover:text-gray-300"><X size={16} /></button>
+        </div>
+        <div className="p-3 flex-1 overflow-auto space-y-3">
+          <Field label="Role Title" value={form.role} onChange={v => set({ role: v })} placeholder="Senior Product Manager" />
+          <Field label="Company" value={form.company} onChange={v => set({ company: v })} placeholder="Acme Corp" />
+          <div className="grid grid-cols-2 gap-2">
+            <Field label="Location" value={form.location} onChange={v => set({ location: v })} placeholder="Bangalore" />
+            <label className="block">
+              <span className="text-[11px] text-gray-500 uppercase tracking-wider">Work Mode</span>
+              <select value={form.workMode} onChange={e => set({ workMode: e.target.value })} className="mt-1 w-full bg-black/30 rounded-lg px-2.5 py-2 text-sm text-white border border-white/5 focus:border-amber-500/30 focus:outline-none">
+                <option value="remote">remote</option>
+                <option value="hybrid">hybrid</option>
+                <option value="onsite">onsite</option>
+              </select>
+            </label>
+          </div>
+          <div className="grid grid-cols-2 gap-2">
+            <Field label={`CTC Min (${settings.currencyUnit || "L"})`} type="number" value={form.ctcMin} onChange={v => set({ ctcMin: v })} placeholder="36" />
+            <Field label={`CTC Max (${settings.currencyUnit || "L"})`} type="number" value={form.ctcMax} onChange={v => set({ ctcMax: v })} placeholder="65" />
+          </div>
+          <div className="grid grid-cols-2 gap-2">
+            <Field label="Base Fit" type="number" value={form.fitBase} onChange={v => set({ fitBase: v })} placeholder="72" />
+            <Field label="Addressable Fit" type="number" value={form.fitTarget} onChange={v => set({ fitTarget: v })} placeholder="84" />
+          </div>
+          <div className="flex items-center gap-2 text-[11px] text-gray-500">
+            <span>Auto segment:</span>
+            <Badge variant={seg === "P3A" ? "teal" : seg === "P3B" ? "blue" : "default"}>{seg}</Badge>
+          </div>
+          <Area label="Key Gaps" value={form.gaps} onChange={v => set({ gaps: v })} placeholder="No direct payments domain experience..." rows={2} />
+          <Field label="JD URL" value={form.jdUrl} onChange={v => set({ jdUrl: v })} placeholder="https://..." />
+          <Area label="Notes" value={form.notes} onChange={v => set({ notes: v })} placeholder="Referral via..." rows={2} />
+        </div>
+        <div className="p-3 border-t border-white/5 flex gap-2">
+          <button onClick={onClose} className="flex-1 py-2 text-xs text-gray-400 bg-white/5 rounded-lg hover:bg-white/10">Cancel</button>
+          <button onClick={submit} className="flex-1 py-2 text-xs font-medium rounded-lg bg-amber-500/15 text-amber-400 hover:bg-amber-500/25">Add to Pipeline</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function RoleDrawer({ role, data, settings, onMove, onUpdate, onDelete, onClose }) {
+  const [confirmDel, setConfirmDel] = useState(false);
+  if (!role) return null;
+  const ctc = ctcRange(role, settings);
+  const { stale, weeks } = getStaleness(role, settings);
+  const curCol = roleColumn(role);
+  const linkedStories = (role.starIds || []).map(id => (data.stars.stories || []).find(s => s.storyId === id)).filter(Boolean);
+
+  const cycleArtifact = (key) => {
+    const order = ["PENDING", "BUILT", "DEFERRED"];
+    const next = order[(order.indexOf(role[key]) + 1) % order.length];
+    onUpdate(role.id, { [key]: next });
+  };
+
+  return (
+    <div className="fixed inset-0 z-40 bg-black/60 flex items-end justify-center" onClick={onClose}>
+      <div className="bg-gray-900 rounded-t-xl w-full max-w-lg max-h-[88vh] flex flex-col border-t border-white/10" onClick={e => e.stopPropagation()}>
+        <div className="flex items-start justify-between p-3 border-b border-white/5">
+          <div className="min-w-0">
+            <div className="text-sm font-semibold text-white truncate">{role.role || "Untitled role"}</div>
+            <div className="text-[11px] text-gray-500 flex items-center gap-2 mt-0.5 flex-wrap">
+              {role.company && <span className="inline-flex items-center gap-1"><Building2 size={11} />{role.company}</span>}
+              {role.location && <span className="inline-flex items-center gap-1"><MapPin size={11} />{role.location}</span>}
+              {role.workMode && <Badge>{role.workMode}</Badge>}
+            </div>
+          </div>
+          <button onClick={onClose} className="p-1 text-gray-500 hover:text-gray-300 shrink-0"><X size={16} /></button>
+        </div>
+
+        <div className="p-3 flex-1 overflow-auto space-y-4">
+          {/* Scores */}
+          <div className="grid grid-cols-3 gap-2">
+            <StatCard label="Base Fit" value={role.fitBase || 0} />
+            <StatCard label="Addressable" value={role.fitTarget || role.fitBase || 0} sub={role.fitGap ? `gap +${role.fitGap}` : null} />
+            <StatCard label="CTC" value={ctc || "—"} />
+          </div>
+
+          {stale && (
+            <div className="flex items-center gap-2 p-2 rounded-lg bg-amber-500/10 border border-amber-500/20 text-[11px] text-amber-300">
+              <AlertTriangle size={13} /> Stale — {weeks} weeks since last activity. {roleColumn(role) === "submitted" ? "Follow up or demote." : "Time to rescore."}
+            </div>
+          )}
+
+          {/* Move between columns */}
+          <div>
+            <div className="text-[11px] text-gray-500 uppercase tracking-wider mb-1.5">Stage · Move</div>
+            <div className="flex flex-wrap gap-1.5">
+              {PIPELINE_COLUMNS.map(c => (
+                <button
+                  key={c.id}
+                  onClick={() => onMove(role, c.id)}
+                  className={`px-2.5 py-1.5 rounded-lg text-[11px] font-medium transition-colors ${c.id === curCol ? "bg-amber-500/20 text-amber-400" : "bg-white/5 text-gray-400 hover:bg-white/10"}`}
+                >
+                  {c.label}{c.sub ? <span className="opacity-50"> ·{c.sub}</span> : null}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Artifacts */}
+          <div>
+            <div className="text-[11px] text-gray-500 uppercase tracking-wider mb-1.5">Artifacts (tap to cycle)</div>
+            <div className="grid grid-cols-3 gap-2">
+              {[["resumeStatus", "Resume"], ["playbookStatus", "Playbook"], ["coverNoteStatus", "Cover Note"]].map(([k, lbl]) => (
+                <button key={k} onClick={() => cycleArtifact(k)} className="p-2 rounded-lg bg-white/5 border border-white/5 text-center hover:border-white/10">
+                  <div className="text-[10px] text-gray-500">{lbl}</div>
+                  <Badge variant={role[k] === "BUILT" ? "green" : role[k] === "DEFERRED" ? "amber" : "default"}>{role[k] || "PENDING"}</Badge>
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Linked stories */}
+          <div>
+            <div className="text-[11px] text-gray-500 uppercase tracking-wider mb-1.5">Linked Stories ({linkedStories.length})</div>
+            {linkedStories.length === 0 ? (
+              <div className="text-[11px] text-gray-600">No stories linked yet.</div>
+            ) : (
+              <div className="space-y-1">
+                {linkedStories.map(s => (
+                  <div key={s.storyId} className="flex items-center gap-2 p-1.5 rounded bg-white/5 text-[11px]">
+                    <span className="font-mono text-amber-400">{s.storyId}</span>
+                    <span className="text-gray-300 truncate flex-1">{s.title}</span>
+                    <span className="text-teal-400 text-[9px]">{"★".repeat(s.starRating || 0)}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* Editable details */}
+          <div className="space-y-2">
+            <Area label="What it is" value={role.whatItIs} onChange={v => onUpdate(role.id, { whatItIs: v })} rows={2} placeholder="One-line description of the role" />
+            <Area label="Gaps" value={role.gaps} onChange={v => onUpdate(role.id, { gaps: v })} rows={2} placeholder="Capability gaps to close" />
+            <Area label="Notes" value={role.notes} onChange={v => onUpdate(role.id, { notes: v })} rows={2} placeholder="Referrals, context, reminders" />
+          </div>
+
+          {/* Stage history */}
+          <div>
+            <div className="text-[11px] text-gray-500 uppercase tracking-wider mb-1.5">Stage History</div>
+            <div className="space-y-1">
+              {(role.stageTracker?.history || []).slice().reverse().map((h, i) => (
+                <div key={i} className="flex items-center gap-2 text-[11px]">
+                  <span className="w-1.5 h-1.5 rounded-full bg-teal-400/60 shrink-0" />
+                  <span className="text-gray-300">{h.stage}</span>
+                  <span className="text-gray-600 ml-auto">{(h.date || "").slice(0, 10)}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* Delete */}
+          {!confirmDel ? (
+            <button onClick={() => setConfirmDel(true)} className="flex items-center gap-1.5 text-[11px] text-gray-500 hover:text-red-400">
+              <Trash2 size={12} /> Remove role
+            </button>
+          ) : (
+            <div className="flex gap-2">
+              <button onClick={() => setConfirmDel(false)} className="flex-1 py-1.5 text-xs bg-white/5 rounded text-gray-400">Cancel</button>
+              <button onClick={() => onDelete(role.id)} className="flex-1 py-1.5 text-xs bg-red-500/20 rounded text-red-300">Delete</button>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function ZonePipeline({ data, dispatch }) {
+  const roles = data.pipeline.roles || [];
+  const settings = data.settings;
+  const [addOpen, setAddOpen] = useState(false);
+  const [openId, setOpenId] = useState(null);
+  const openRole = roles.find(r => r.id === openId) || null;
+
+  const saveRoles = useCallback(async (nextRoles) => {
+    const next = { ...data.pipeline, roles: nextRoles };
+    await saveData("pipeline", next);
+    dispatch({ type: "DATA_UPDATED", key: "pipeline", value: { ...next, lastUpdated: new Date().toISOString() } });
+  }, [data.pipeline, dispatch]);
+
+  const addRole = (role) => {
+    if (roles.some(r => r.id === role.id)) role.id = role.id + "-" + Date.now().toString(36);
+    saveRoles([...roles, role]);
+    dispatch({ type: "SHOW_TOAST", message: `Added ${role.role || "role"} → ${role.segment}`, toastType: "success" });
+  };
+
+  const updateRole = (id, patch) => {
+    saveRoles(roles.map(r => r.id === id ? { ...r, ...patch, lastActivity: new Date().toISOString() } : r));
+  };
+
+  const deleteRole = (id) => {
+    saveRoles(roles.filter(r => r.id !== id));
+    setOpenId(null);
+    dispatch({ type: "SHOW_TOAST", message: "Role removed", toastType: "info" });
+  };
+
+  const moveRole = (role, targetColId) => {
+    if (roleColumn(role) === targetColId) return;
+    const col = PIPELINE_COLUMNS.find(c => c.id === targetColId);
+    const cap = checkCapacity(roles, col, settings, role.id);
+    if (!cap.ok) { dispatch({ type: "SHOW_TOAST", message: cap.message, toastType: "error" }); return; }
+    if (cap.warn) dispatch({ type: "SHOW_TOAST", message: cap.message, toastType: "info" });
+
+    const now = new Date().toISOString();
+    const patch = { lastActivity: now };
+    if (col.kind === "segment") { patch.segment = col.segment; patch.applicationStatus = "BUILD"; }
+    else { patch.applicationStatus = col.status; }
+    const history = [...(role.stageTracker?.history || []), { stage: col.label, date: now, note: "" }];
+    patch.stageTracker = { ...role.stageTracker, currentStage: role.stageTracker?.currentStage || "IDENTIFIED", lastUpdated: now, history };
+    saveRoles(roles.map(r => r.id === role.id ? { ...r, ...patch } : r));
+  };
+
   const stats = getPipelineStats(data.pipeline);
+  const caps = settings.capacityCaps || {};
 
   return (
     <div className="p-4 space-y-4">
-      <div>
-        <h2 className="text-base font-semibold text-white">Pipeline Board</h2>
-        <p className="text-xs text-gray-500 mt-0.5">Track roles from discovery to offer</p>
+      <div className="flex items-center justify-between">
+        <div>
+          <h2 className="text-base font-semibold text-white">Pipeline Board</h2>
+          <p className="text-xs text-gray-500 mt-0.5">{stats.total} roles · {stats.P2}/{caps.P2 || 5} active · {stats.P3B}/{caps.P3B || 7} tracking</p>
+        </div>
+        <button onClick={() => setAddOpen(true)} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-amber-500/15 text-amber-400 text-xs font-medium hover:bg-amber-500/25 transition-colors">
+          <Plus size={14} /> Add
+        </button>
       </div>
 
-      <div className="grid grid-cols-3 gap-2">
-        <StatCard label="Active" value={stats.P2} sub={`/ ${data.settings.capacityCaps?.P2 || 5} cap`} />
-        <StatCard label="Pipeline" value={stats.P3A + stats.P3B + stats.P3C} sub="tracking" />
-        <StatCard label="Total" value={stats.total} sub="roles" />
-      </div>
+      {roles.length === 0 ? (
+        <EmptyState
+          icon={Target}
+          title="No Roles Yet"
+          description="Add a role manually, or score a JD in the Analyze zone to auto-create a card."
+          action="Add a Role"
+          onAction={() => setAddOpen(true)}
+        />
+      ) : (
+        <div className="flex gap-3 overflow-x-auto -mx-4 px-4 pb-2 snap-x">
+          {PIPELINE_COLUMNS.map(col => {
+            const colRoles = roles.filter(r => roleColumn(r) === col.id);
+            const cap = col.capKey ? caps[col.capKey] : null;
+            const over = cap && colRoles.length > cap;
+            return (
+              <div key={col.id} className="shrink-0 w-64 snap-start">
+                <div className="flex items-center justify-between mb-2 px-0.5">
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-xs font-semibold text-gray-200">{col.label}</span>
+                    {col.sub && <Badge variant={col.accent}>{col.sub}</Badge>}
+                  </div>
+                  <span className={`text-[10px] ${over ? "text-red-400" : "text-gray-500"}`}>
+                    {colRoles.length}{cap ? `/${cap}` : ""}
+                  </span>
+                </div>
+                <div className="space-y-2 min-h-[60px]">
+                  {colRoles.length === 0 ? (
+                    <div className="text-[10px] text-gray-700 text-center py-4 rounded-lg border border-dashed border-white/5">Empty</div>
+                  ) : (
+                    colRoles.map(r => <RoleCard key={r.id} role={r} settings={settings} onOpen={() => setOpenId(r.id)} />)
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
 
-      <EmptyState
-        icon={Target}
-        title={stats.total === 0 ? "No Roles Yet" : `${stats.total} Roles Tracked`}
-        description={stats.total === 0
-          ? "Score a JD in the Analyze zone to add your first role, or add one manually."
-          : "Pipeline board with Kanban columns coming in Batch 3."
-        }
-        action={stats.total === 0 ? "Go to Analyzer" : null}
-        onAction={() => dispatch({ type: "SET_ZONE", zone: "analyzer" })}
+      <AddRoleSheet open={addOpen} onClose={() => setAddOpen(false)} onAdd={addRole} settings={settings} />
+      <RoleDrawer
+        role={openRole}
+        data={data}
+        settings={settings}
+        onMove={moveRole}
+        onUpdate={updateRole}
+        onDelete={deleteRole}
+        onClose={() => setOpenId(null)}
       />
     </div>
   );
