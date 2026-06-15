@@ -8,6 +8,7 @@ import {
   Link2, Lock, Zap, GitBranch, Info
 } from "lucide-react";
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from "recharts";
+import ClaudeApiSettingsPanel from "./ClaudeApiSettingsPanel.jsx";
 
 // ============================================================
 // SECTION 1: CONSTANTS & THEME
@@ -3669,6 +3670,8 @@ function ZoneSettings({ data, dispatch, onSave }) {
           className="mt-1 w-full bg-black/30 rounded-lg px-3 py-2 text-sm text-white border border-white/5 focus:border-amber-500/30 focus:outline-none"
         />
       </div>
+
+      <ClaudeApiSettingsPanel />
 
       <div>
         <label className="text-xs text-gray-500 uppercase tracking-wider mb-2 block">Data Summary</label>
