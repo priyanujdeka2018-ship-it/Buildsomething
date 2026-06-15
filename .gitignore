@@ -1,0 +1,8 @@
+node_modules
+
+dist/
+setup-vite-only.sh
+add-claude-api-settings.cjs
+force-add-api-ui.cjs
+insert-api-panel.cjs
+broken-api-settings.patch
