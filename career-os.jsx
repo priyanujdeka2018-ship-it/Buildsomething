@@ -4,7 +4,8 @@ import {
   Upload, Download, Trash2, ChevronRight, ChevronLeft, Check, AlertCircle,
   Loader2, X, FileText, Plus, BarChart3, BookOpen,
   Copy, Sparkles, Users, Brain, ListChecks, ArrowRight,
-  Clock, Building2, MapPin, AlertTriangle, Repeat, DollarSign, Wand2
+  Clock, Building2, MapPin, AlertTriangle, Repeat, DollarSign, Wand2,
+  Link2, Lock, Zap, GitBranch
 } from "lucide-react";
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from "recharts";
 
@@ -1093,6 +1094,221 @@ function parseMockResults(sections) {
     averages,
     actions: parseLooseList(sections.IMPROVEMENT_ACTIONS || ""),
   };
+}
+
+function domainDescription(profile) {
+  const parts = [profile.achievementStatement, ...(profile.operationalMetrics || []).map(o => `${o.name}: ${o.before}→${o.after}`)];
+  return parts.filter(Boolean).join("; ").slice(0, 500) || "general business operations data";
+}
+
+function buildAP04System(data, skill) {
+  const id = data.profile.identity || {};
+  const tech = (data.profile.technologyStack || []).map(t => t.platform).filter(Boolean).join(", ") || "none specified";
+  return `You are a skill-building curriculum designer. You create structured weekly study plans
+for career transitioners closing specific skill gaps.
+
+DESIGN PRINCIPLES:
+- Every exercise uses the candidate's own domain data where possible
+- Weekly milestones are testable (not "read about X" but "complete exercise Y")
+- Time estimates are realistic for a working professional (specify hours/week)
+- Resources prioritize free tiers: official docs, YouTube, free cert practice sites
+- Flag hard gates (exam dates, application deadlines) as immovable anchors
+- Build dependency chains explicitly (e.g., "SQL before Power BI")
+
+CANDIDATE CONTEXT:
+Current role: ${id.currentTitle || "professional"} at ${id.employer || "current employer"}
+Domain data available for exercises: ${domainDescription(data.profile)}
+Existing skills: ${tech}
+Weekly time budget: ${skill.hoursPerWeek || 5} hours
+
+SKILL TO BUILD:
+Name: ${skill.name}
+Type: ${skill.type}
+Linked roles: ${skill.linkedRoleNames || "general transition"}
+Target date: ${skill.targetDate || "flexible"}
+Hard gate: ${skill.gateDate || "none"}
+
+OUTPUT FORMAT — respond with ONLY this JSON:
+{
+  "trackName": "", "totalWeeks": 0, "hoursPerWeek": 0,
+  "weeks": [
+    { "weekNumber": 1, "title": "", "objectives": [""],
+      "tasks": [{ "id": "W1-T1", "description": "", "timeEstimateMinutes": 0 }],
+      "resources": [{ "name": "", "url": "", "type": "video|doc|practice|tool", "free": true }],
+      "milestone": "", "milestoneTest": "" }
+  ],
+  "examPrep": { "mockExamStrategy": "", "targetScore": "", "practiceResources": [""] },
+  "dependencies": [""], "notes": ""
+}`;
+}
+
+function buildAP05System(data, role, changeDescription) {
+  const card = {
+    id: role.id, role: role.role, company: role.company, segment: role.segment,
+    fitBase: role.fitBase, fitTarget: role.fitTarget, fitGap: role.fitGap,
+    subScores: role.subScores, dimensionScores: role.dimensionScores,
+  };
+  return `You are a role-fit rescoring engine. You apply a score delta to an existing role card
+based on a specific change (skill acquired, cert earned, gap closed).
+
+NO-RECOMPUTE RULE: Do NOT recalculate the full 10-dimension weighted sum.
+Only apply the delta from the specific change to the existing composite score.
+
+CHANGE:
+${changeDescription}
+
+CURRENT ROLE CARD:
+${JSON.stringify(card)}
+
+SCORING WEIGHTS:
+${JSON.stringify(data.settings.scoringWeights)}
+
+Calculate:
+1. Which dimension(s) are affected by this change
+2. How many points each affected dimension gains (max +3 per dimension, cap at 10)
+3. New addressable fit = old addressable + weighted delta
+4. Whether the segment recommendation changes
+5. Whether this triggers a promotion signal (crosses 80, or gap drops to ≤10)
+
+SEGMENT CRITERIA:
+${JSON.stringify(data.settings.segmentCriteria)}
+
+OUTPUT FORMAT — respond with ONLY this JSON:
+{
+  "roleId": "", "previousFitTarget": 0, "newFitTarget": 0, "delta": 0,
+  "dimensionsChanged": [{ "dim": 0, "previousScore": 0, "newScore": 0, "reason": "" }],
+  "newSubScores": { "functional": 0, "technicalCert": 0, "leadershipVocab": 0 },
+  "previousSegment": "", "newSegment": "", "segmentChanged": false,
+  "promotionSignal": false, "promotionReason": ""
+}`;
+}
+
+function buildOP07(track, week, count, difficulty) {
+  return `Generate ${count} practice exercises for ${track.name}, Week ${week.weekNumber}.
+
+TOPIC: ${week.title}
+OBJECTIVES: ${(week.objectives || []).join("; ")}
+DIFFICULTY: ${difficulty}
+
+DOMAIN CONTEXT (use this data for realistic exercises):
+${week.milestone ? "Milestone: " + week.milestone : ""}
+
+EXERCISE FORMAT:
+For each exercise provide: (1) a clear problem statement, (2) expected output or answer,
+(3) step-by-step explanation, (4) one "bonus challenge" extension.
+
+Format your output as:
+
+<!-- COS_IMPORT zone:5 type:practice-results date:${todayStr()} -->
+
+## PRACTICE_RESULTS
+track: ${track.trackId}
+skill: ${track.name}
+week: ${week.weekNumber}
+date: ${todayStr()}
+source: chatgpt
+type: EXERCISE
+
+### Exercise 1: [title]
+question: [problem statement]
+expectedOutput: [correct answer]
+explanation: [step-by-step]
+bonusChallenge: [extension]
+
+[repeat for each exercise]
+
+## SCORE
+total: ${count}
+correct: [fill in after attempting]
+percentage: [fill in]%
+weakAreas: [fill in]
+strongAreas: [fill in]`;
+}
+
+function buildOP08(track, week, questionCount) {
+  return `Generate a ${questionCount}-question mock exam for ${track.name}.
+
+FOCUS AREA: ${week ? week.title : "full syllabus"}
+DIFFICULTY: Match the actual exam difficulty for ${track.name}
+FORMAT: Multiple choice (4 options each), matching the real exam format
+
+For each question: (1) question text, (2) four options A-D, (3) correct answer,
+(4) brief explanation of why it's correct and why the common wrong answer is wrong.
+
+Format your output as:
+
+<!-- COS_IMPORT zone:5 type:practice-results date:${todayStr()} -->
+
+## PRACTICE_RESULTS
+track: ${track.trackId}
+skill: ${track.name}
+week: ${week ? week.weekNumber : 0}
+date: ${todayStr()}
+source: chatgpt
+type: MOCK_EXAM
+
+### Q1: [question text]
+options:
+- A: [option]
+- B: [option]
+- C: [option]
+- D: [option]
+correct: [letter]
+explanation: [why correct + why common wrong answer is wrong]
+
+[repeat]
+
+## ANSWER_KEY
+| Q | Correct | Your Answer | Result |
+|---|---------|-------------|--------|
+| 1 | A | | |
+
+## SCORE
+total: ${questionCount}
+correct: [fill in after attempting]
+percentage: [fill in]%
+weakAreas: [fill in]
+strongAreas: [fill in]`;
+}
+
+function parsePracticeResults(sections) {
+  const meta = parseMdKeyValues(sections.PRACTICE_RESULTS || "");
+  const sc = parseMdKeyValues(sections.SCORE || "");
+  const total = parseInt(sc.total) || 0;
+  const correct = parseInt(sc.correct) || 0;
+  let score = sc.percentage ? parseInt(sc.percentage) : null;
+  if (score == null && total) score = Math.round((correct / total) * 100);
+  return {
+    trackId: meta.track || "",
+    skill: meta.skill || "",
+    week: parseInt(meta.week) || null,
+    date: meta.date || todayStr(),
+    source: meta.source || "chatgpt",
+    type: meta.type || "EXERCISE",
+    score, totalQuestions: total, correct,
+    weakAreas: sc.weakAreas || "",
+    strongAreas: sc.strongAreas || "",
+  };
+}
+
+function nextTrackId(tracks) {
+  let max = 0;
+  for (const t of tracks || []) { const m = /^TRK-(\d+)$/.exec(t.trackId || ""); if (m) max = Math.max(max, parseInt(m[1])); }
+  return "TRK-" + String(max + 1).padStart(2, "0");
+}
+
+function trackProgress(track) {
+  const weeks = track.curriculum?.weeks || [];
+  let total = 0, done = 0;
+  for (const w of weeks) for (const t of (w.tasks || [])) { total++; if (t.completed) done++; }
+  return { total, done, pct: total ? Math.round((done / total) * 100) : 0 };
+}
+
+function trackStalled(track) {
+  if (track.status !== "ACTIVE") return false;
+  if (!track.lastActivity) return false;
+  const days = (Date.now() - new Date(track.lastActivity).getTime()) / 864e5;
+  return days > (track.stallThresholdDays || 3);
 }
 
 function parseJsonResponse(text) {
@@ -2943,28 +3159,386 @@ function ZonePrep({ data, dispatch }) {
   );
 }
 
+const TRACK_TYPES = ["CERT", "TOOL", "DOMAIN", "LANGUAGE", "PROTOTYPE"];
+
+function NewTrackSheet({ open, onClose, onAdd, roles, settings }) {
+  const blank = { name: "", type: "CERT", linkedRoleIds: [], targetDate: "", gateDate: "", hoursPerWeek: 5, notes: "" };
+  const [form, setForm] = useState(blank);
+  useEffect(() => { if (open) setForm(blank); }, [open]); // eslint-disable-line react-hooks/exhaustive-deps
+  if (!open) return null;
+  const set = patch => setForm(f => ({ ...f, ...patch }));
+  const toggleRole = id => set({ linkedRoleIds: form.linkedRoleIds.includes(id) ? form.linkedRoleIds.filter(x => x !== id) : [...form.linkedRoleIds, id] });
+  const submit = () => { if (!form.name.trim()) { onClose(); return; } onAdd(form); onClose(); };
+  return (
+    <div className="fixed inset-0 z-40 bg-black/60 flex items-end justify-center" onClick={onClose}>
+      <div className="bg-gray-900 rounded-t-xl w-full max-w-lg max-h-[85vh] flex flex-col border-t border-white/10" onClick={e => e.stopPropagation()}>
+        <div className="flex items-center justify-between p-3 border-b border-white/5">
+          <h3 className="text-sm font-medium text-white">New Skill Track</h3>
+          <button onClick={onClose} className="p-1 text-gray-500 hover:text-gray-300"><X size={16} /></button>
+        </div>
+        <div className="p-3 flex-1 overflow-auto space-y-3">
+          <Field label="Skill / Cert Name" value={form.name} onChange={v => set({ name: v })} placeholder="SQL for Analytics, AWS SAA, Power BI…" />
+          <label className="block">
+            <span className="text-[11px] text-gray-500 uppercase tracking-wider">Type</span>
+            <select value={form.type} onChange={e => set({ type: e.target.value })} className="mt-1 w-full bg-black/30 rounded-lg px-2.5 py-2 text-sm text-white border border-white/5 focus:border-amber-500/30 focus:outline-none">
+              {TRACK_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
+            </select>
+          </label>
+          <div className="grid grid-cols-2 gap-2">
+            <Field label="Target Date" value={form.targetDate} onChange={v => set({ targetDate: v })} placeholder="2026-09-01" />
+            <Field label="Hard Gate (exam)" value={form.gateDate} onChange={v => set({ gateDate: v })} placeholder="optional" />
+          </div>
+          <Field label="Hours / Week" type="number" value={form.hoursPerWeek} onChange={v => set({ hoursPerWeek: v })} placeholder="5" />
+          <div>
+            <span className="text-[11px] text-gray-500 uppercase tracking-wider">Linked Roles</span>
+            {roles.length === 0 ? (
+              <p className="text-[11px] text-gray-600 mt-1">No pipeline roles yet — link later from the track.</p>
+            ) : (
+              <div className="flex flex-wrap gap-1.5 mt-1.5">
+                {roles.map(r => (
+                  <button key={r.id} onClick={() => toggleRole(r.id)} className={`px-2 py-1 rounded text-[11px] transition-colors ${form.linkedRoleIds.includes(r.id) ? "bg-teal-500/20 text-teal-400" : "bg-white/5 text-gray-500 hover:text-gray-300"}`}>
+                    {r.role || r.company}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+          <Area label="Context (for curriculum)" value={form.notes} onChange={v => set({ notes: v })} rows={2} placeholder="What you already know, exam format, focus areas…" />
+        </div>
+        <div className="p-3 border-t border-white/5 flex gap-2">
+          <button onClick={onClose} className="flex-1 py-2 text-xs text-gray-400 bg-white/5 rounded-lg hover:bg-white/10">Cancel</button>
+          <button onClick={submit} className="flex-1 py-2 text-xs font-medium rounded-lg bg-amber-500/15 text-amber-400 hover:bg-amber-500/25">Create Track</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function TrackCard({ track, roles, onOpen }) {
+  const { pct, done, total } = trackProgress(track);
+  const stalled = trackStalled(track);
+  const linked = (track.linkedRoleIds || []).map(id => roles.find(r => r.id === id)).filter(Boolean);
+  const statusVariant = track.status === "COMPLETE" ? "green" : track.status === "ACTIVE" ? "amber" : "default";
+  return (
+    <button onClick={onOpen} className="w-full text-left p-3 rounded-lg bg-white/5 border border-white/5 hover:border-amber-500/20 transition-colors space-y-2">
+      <div className="flex items-start gap-2">
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-1.5">
+            <span className="text-[10px] font-mono text-gray-500">{track.trackId}</span>
+            <Badge>{track.type}</Badge>
+          </div>
+          <div className="text-sm font-medium text-gray-200 truncate mt-0.5">{track.name}</div>
+        </div>
+        <div className="flex flex-col items-end gap-1">
+          <Badge variant={statusVariant}>{track.status}</Badge>
+          {stalled && <span className="inline-flex items-center gap-0.5 text-[9px] text-amber-400 bg-amber-500/10 px-1.5 py-0.5 rounded"><AlertTriangle size={9} />stalled</span>}
+        </div>
+      </div>
+      {total > 0 && (
+        <div className="space-y-1">
+          <div className="flex justify-between text-[10px] text-gray-500"><span>{done}/{total} tasks</span><span>{pct}%</span></div>
+          <div className="h-1.5 rounded-full bg-white/5 overflow-hidden"><div className="h-full rounded-full bg-amber-400" style={{ width: `${pct}%` }} /></div>
+        </div>
+      )}
+      {linked.length > 0 && (
+        <div className="flex flex-wrap gap-1">
+          {linked.map(r => <span key={r.id} className="inline-flex items-center gap-0.5 text-[9px] text-teal-400"><Link2 size={9} />{r.role || r.company}</span>)}
+        </div>
+      )}
+    </button>
+  );
+}
+
+function TrackDrawer({ track, data, dispatch, onGenerate, onToggleTask, onCompleteMilestone, onPractice, onSetStatus, onDelete, onClose, generating }) {
+  const [confirmDel, setConfirmDel] = useState(false);
+  const [openWeek, setOpenWeek] = useState(null);
+  const [busyWeek, setBusyWeek] = useState(null);
+  if (!track) return null;
+  const weeks = track.curriculum?.weeks || [];
+  const { pct, done, total } = trackProgress(track);
+  const allTracks = data.skills.tracks || [];
+  const deps = (track.dependencies || []).map(id => allTracks.find(t => t.trackId === id) || { trackId: id, name: id });
+  const linked = (track.linkedRoleIds || []).map(id => (data.pipeline.roles || []).find(r => r.id === id)).filter(Boolean);
+
+  const doComplete = async (w) => { setBusyWeek(w.weekNumber); await onCompleteMilestone(track, w); setBusyWeek(null); };
+
+  return (
+    <div className="fixed inset-0 z-40 bg-black/60 flex items-end justify-center" onClick={onClose}>
+      <div className="bg-gray-900 rounded-t-xl w-full max-w-lg max-h-[88vh] flex flex-col border-t border-white/10" onClick={e => e.stopPropagation()}>
+        <div className="flex items-start justify-between p-3 border-b border-white/5">
+          <div className="min-w-0">
+            <div className="flex items-center gap-1.5">
+              <span className="text-[10px] font-mono text-gray-500">{track.trackId}</span>
+              <Badge>{track.type}</Badge>
+              <Badge variant={track.status === "COMPLETE" ? "green" : track.status === "ACTIVE" ? "amber" : "default"}>{track.status}</Badge>
+            </div>
+            <div className="text-sm font-semibold text-white truncate mt-0.5">{track.name}</div>
+          </div>
+          <button onClick={onClose} className="p-1 text-gray-500 hover:text-gray-300 shrink-0"><X size={16} /></button>
+        </div>
+
+        <div className="p-3 flex-1 overflow-auto space-y-4">
+          {total > 0 && (
+            <div className="space-y-1">
+              <div className="flex justify-between text-[11px] text-gray-500"><span>{done}/{total} tasks complete</span><span>{pct}%</span></div>
+              <div className="h-2 rounded-full bg-white/5 overflow-hidden"><div className="h-full rounded-full bg-amber-400" style={{ width: `${pct}%` }} /></div>
+            </div>
+          )}
+
+          {linked.length > 0 && (
+            <div>
+              <div className="text-[11px] text-gray-500 uppercase tracking-wider mb-1.5">Linked Roles</div>
+              <div className="flex flex-wrap gap-1.5">{linked.map(r => <Badge key={r.id} variant="teal">{r.role || r.company}</Badge>)}</div>
+            </div>
+          )}
+
+          {deps.length > 0 && (
+            <div>
+              <div className="text-[11px] text-gray-500 uppercase tracking-wider mb-1.5 flex items-center gap-1"><GitBranch size={11} />Dependencies</div>
+              <div className="flex flex-wrap items-center gap-1.5">
+                {deps.map((d, i) => <span key={i} className="inline-flex items-center gap-1 text-[11px] text-gray-400"><Lock size={10} className="text-gray-600" />{d.name}</span>)}
+              </div>
+            </div>
+          )}
+
+          {/* Curriculum */}
+          {weeks.length === 0 ? (
+            <div className="text-center py-6 space-y-3">
+              <p className="text-xs text-gray-500">No curriculum yet. Generate a weekly plan with milestones.</p>
+              <button onClick={() => onGenerate(track)} disabled={generating} className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-medium rounded-lg bg-amber-500/15 text-amber-400 hover:bg-amber-500/25 disabled:opacity-40">
+                {generating ? <Loader2 size={14} className="animate-spin" /> : <Sparkles size={14} />}{generating ? "Building curriculum…" : "Generate Curriculum (AP-04)"}
+              </button>
+            </div>
+          ) : (
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <div className="text-[11px] text-gray-500 uppercase tracking-wider">{weeks.length}-Week Plan · {track.curriculum?.hoursPerWeek || "?"}h/wk</div>
+                <button onClick={() => onGenerate(track)} disabled={generating} className="text-[10px] text-gray-500 hover:text-amber-400 flex items-center gap-1">{generating ? <Loader2 size={10} className="animate-spin" /> : <Repeat size={10} />}Regenerate</button>
+              </div>
+              {weeks.map(w => {
+                const open = openWeek === w.weekNumber;
+                const wDone = (w.tasks || []).every(t => t.completed) && (w.tasks || []).length > 0;
+                return (
+                  <div key={w.weekNumber} className="rounded-lg bg-white/5 border border-white/5 overflow-hidden">
+                    <button onClick={() => setOpenWeek(open ? null : w.weekNumber)} className="w-full flex items-center gap-2 p-2.5 text-left">
+                      <span className={`w-5 h-5 rounded-full flex items-center justify-center text-[9px] shrink-0 ${wDone ? "bg-emerald-500/20 text-emerald-400" : "bg-white/10 text-gray-400"}`}>{wDone ? <Check size={11} /> : w.weekNumber}</span>
+                      <span className="flex-1 min-w-0 text-xs text-gray-200 truncate">{w.title}</span>
+                      <ChevronRight size={14} className={`text-gray-600 shrink-0 transition-transform ${open ? "rotate-90" : ""}`} />
+                    </button>
+                    {open && (
+                      <div className="p-2.5 pt-0 space-y-2 border-t border-white/5">
+                        {(w.objectives || []).length > 0 && (
+                          <ul className="space-y-0.5">{w.objectives.map((o, i) => <li key={i} className="text-[10px] text-gray-500 flex gap-1"><span className="text-amber-400">•</span>{o}</li>)}</ul>
+                        )}
+                        <div className="space-y-1">
+                          {(w.tasks || []).map(t => (
+                            <button key={t.id} onClick={() => onToggleTask(track, w.weekNumber, t.id)} className="w-full flex items-start gap-2 text-left">
+                              <span className={`w-4 h-4 rounded border shrink-0 mt-0.5 flex items-center justify-center ${t.completed ? "bg-amber-500/20 border-amber-500/40 text-amber-400" : "border-white/15"}`}>{t.completed && <Check size={10} />}</span>
+                              <span className={`text-[11px] leading-relaxed ${t.completed ? "text-gray-500 line-through" : "text-gray-300"}`}>{t.description}{t.timeEstimateMinutes ? <span className="text-gray-600"> · {t.timeEstimateMinutes}m</span> : null}</span>
+                            </button>
+                          ))}
+                        </div>
+                        {(w.resources || []).length > 0 && (
+                          <div className="flex flex-wrap gap-1">{w.resources.map((r, i) => r.url ? <a key={i} href={r.url} target="_blank" rel="noreferrer" className="text-[10px] text-teal-400 hover:underline">{r.name || r.type}↗</a> : <span key={i} className="text-[10px] text-gray-500">{r.name}</span>)}</div>
+                        )}
+                        {w.milestone && (
+                          <div className="p-2 rounded bg-black/20 text-[11px] text-gray-400"><span className="text-amber-400">Milestone:</span> {w.milestone}</div>
+                        )}
+                        <div className="flex flex-wrap gap-1.5">
+                          <button onClick={() => onPractice(track, w, "OP-07")} className="flex items-center gap-1 px-2.5 py-1.5 text-[11px] rounded bg-white/5 text-gray-300 hover:bg-white/10"><FileText size={11} />Generate Practice</button>
+                          {track.type === "CERT" && <button onClick={() => onPractice(track, w, "OP-08")} className="flex items-center gap-1 px-2.5 py-1.5 text-[11px] rounded bg-white/5 text-gray-300 hover:bg-white/10"><BookOpen size={11} />Mock Exam</button>}
+                          <button onClick={() => doComplete(w)} disabled={busyWeek === w.weekNumber} className="flex items-center gap-1 px-2.5 py-1.5 text-[11px] rounded bg-emerald-500/15 text-emerald-400 hover:bg-emerald-500/25 disabled:opacity-40">
+                            {busyWeek === w.weekNumber ? <Loader2 size={11} className="animate-spin" /> : <Zap size={11} />}Mark Complete
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
+          {/* Practice results */}
+          {(track.practiceResults || []).length > 0 && (
+            <div>
+              <div className="text-[11px] text-gray-500 uppercase tracking-wider mb-1.5">Practice Log ({track.practiceResults.length})</div>
+              <div className="space-y-1">
+                {track.practiceResults.slice().reverse().map((p, i) => (
+                  <div key={i} className="flex items-center gap-2 p-1.5 rounded bg-white/5 text-[10px]">
+                    <Badge variant={p.type === "MOCK_EXAM" ? "blue" : "default"}>{p.type}</Badge>
+                    <span className="text-gray-500">{(p.date || "").slice(0, 10)}{p.week ? ` · wk${p.week}` : ""}</span>
+                    {p.score != null && <span className={`ml-auto font-medium ${p.score >= 80 ? "text-emerald-400" : p.score >= 60 ? "text-amber-400" : "text-red-400"}`}>{p.score}%</span>}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Status control + delete */}
+          <div className="flex items-center gap-2 pt-1">
+            <label className="flex-1">
+              <span className="text-[10px] text-gray-500 uppercase tracking-wider">Status</span>
+              <select value={track.status} onChange={e => onSetStatus(track.trackId, e.target.value)} className="mt-1 w-full bg-black/30 rounded px-2 py-1.5 text-[11px] text-white border border-white/5 focus:border-amber-500/30 focus:outline-none">
+                {["ACTIVE", "QUEUED", "NOT_STARTED", "COMPLETE", "PAUSED"].map(s => <option key={s} value={s}>{s}</option>)}
+              </select>
+            </label>
+          </div>
+          {!confirmDel ? (
+            <button onClick={() => setConfirmDel(true)} className="flex items-center gap-1.5 text-[11px] text-gray-500 hover:text-red-400"><Trash2 size={12} />Delete track</button>
+          ) : (
+            <div className="flex gap-2"><button onClick={() => setConfirmDel(false)} className="flex-1 py-1.5 text-xs bg-white/5 rounded text-gray-400">Cancel</button><button onClick={() => onDelete(track.trackId)} className="flex-1 py-1.5 text-xs bg-red-500/20 rounded text-red-300">Delete</button></div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function ZoneSkills({ data, dispatch }) {
-  const trackCount = getTrackCount(data.skills);
-  const activeCount = getActiveTrackCount(data.skills);
+  const tracks = data.skills.tracks || [];
+  const roles = data.pipeline.roles || [];
+  const [addOpen, setAddOpen] = useState(false);
+  const [openId, setOpenId] = useState(null);
+  const [generating, setGenerating] = useState(false);
+  const [prompt, setPrompt] = useState(null);
+  const openTrack = tracks.find(t => t.trackId === openId) || null;
+
+  const saveSkills = useCallback(async (nextTracks) => {
+    const next = { ...data.skills, tracks: nextTracks };
+    await saveData("skills", next);
+    dispatch({ type: "DATA_UPDATED", key: "skills", value: { ...next, lastUpdated: new Date().toISOString() } });
+  }, [data.skills, dispatch]);
+
+  const savePipeline = useCallback(async (nextRoles) => {
+    const next = { ...data.pipeline, roles: nextRoles };
+    await saveData("pipeline", next);
+    dispatch({ type: "DATA_UPDATED", key: "pipeline", value: { ...next, lastUpdated: new Date().toISOString() } });
+  }, [data.pipeline, dispatch]);
+
+  const addTrack = (input) => {
+    const now = new Date().toISOString();
+    const track = {
+      trackId: nextTrackId(tracks), name: input.name, type: input.type, status: "NOT_STARTED",
+      linkedRoleIds: input.linkedRoleIds || [], rolesUnlocked: 0, priority: tracks.length + 1, priorityReason: "",
+      startDate: now, targetDate: input.targetDate || null, gateDate: input.gateDate || null, gateDateHard: !!input.gateDate,
+      curriculum: { generatedBy: null, generatedDate: null, totalWeeks: 0, hoursPerWeek: Number(input.hoursPerWeek) || 5, weeks: [] },
+      practiceResults: [], dependencies: [], lastActivity: now,
+      stallThresholdDays: data.settings.stalenessWeeks?.skillStallDays || 3, notes: input.notes || "", examPrep: null,
+    };
+    saveSkills([...tracks, track]);
+    setOpenId(track.trackId);
+    dispatch({ type: "SHOW_TOAST", message: `Track created: ${track.name}`, toastType: "success" });
+  };
+
+  const generateCurriculum = async (track) => {
+    setGenerating(true);
+    try {
+      const linkedNames = (track.linkedRoleIds || []).map(id => roles.find(r => r.id === id)?.role).filter(Boolean).join(", ");
+      const skill = { name: track.name, type: track.type, linkedRoleNames: linkedNames, targetDate: track.targetDate, gateDate: track.gateDate, hoursPerWeek: track.curriculum?.hoursPerWeek };
+      const res = await callClaudeAPI({ systemPrompt: buildAP04System(data, skill), userMessage: `Build curriculum for: ${track.name}\nDeadline: ${track.targetDate || "flexible"}\nContext: ${track.notes || linkedNames}`, maxTokens: 3000 });
+      const out = parseJsonResponse(res.text);
+      const now = new Date().toISOString();
+      const weeks = (out.weeks || []).map(w => ({
+        weekNumber: w.weekNumber, title: w.title || `Week ${w.weekNumber}`, objectives: w.objectives || [],
+        tasks: (w.tasks || []).map((t, i) => ({ id: t.id || `W${w.weekNumber}-T${i + 1}`, description: t.description || "", completed: false, completedDate: null, timeEstimateMinutes: t.timeEstimateMinutes || 0 })),
+        resources: w.resources || [], milestone: w.milestone || "", milestoneTest: w.milestoneTest || "",
+      }));
+      saveSkills(tracks.map(t => t.trackId === track.trackId ? {
+        ...t, name: out.trackName || t.name, status: "ACTIVE", lastActivity: now,
+        curriculum: { generatedBy: "claude-api", generatedDate: now, totalWeeks: out.totalWeeks || weeks.length, hoursPerWeek: out.hoursPerWeek || t.curriculum?.hoursPerWeek, weeks },
+        dependencies: out.dependencies?.filter(Boolean) || [], examPrep: out.examPrep || null, notes: out.notes || t.notes,
+      } : t));
+      dispatch({ type: "SHOW_TOAST", message: "Curriculum generated", toastType: "success" });
+    } catch (err) {
+      dispatch({ type: "SHOW_TOAST", message: "Curriculum failed: " + (err?.message || err), toastType: "error" });
+    }
+    setGenerating(false);
+  };
+
+  const toggleTask = (track, weekNumber, taskId) => {
+    const now = new Date().toISOString();
+    const weeks = track.curriculum.weeks.map(w => w.weekNumber === weekNumber
+      ? { ...w, tasks: w.tasks.map(t => t.id === taskId ? { ...t, completed: !t.completed, completedDate: !t.completed ? now : null } : t) }
+      : w);
+    saveSkills(tracks.map(t => t.trackId === track.trackId ? { ...t, curriculum: { ...t.curriculum, weeks }, lastActivity: now } : t));
+  };
+
+  const completeMilestone = async (track, week) => {
+    const now = new Date().toISOString();
+    // Mark all tasks in the week complete locally first.
+    const weeks = track.curriculum.weeks.map(w => w.weekNumber === week.weekNumber ? { ...w, tasks: (w.tasks || []).map(t => ({ ...t, completed: true, completedDate: t.completedDate || now })) } : w);
+    const allDone = weeks.every(w => (w.tasks || []).every(t => t.completed));
+    let nextTracks = tracks.map(t => t.trackId === track.trackId ? { ...t, curriculum: { ...t.curriculum, weeks }, status: allDone ? "COMPLETE" : t.status, lastActivity: now } : t);
+    await saveSkills(nextTracks);
+
+    // Auto-rescore linked roles (AP-05).
+    const linked = (track.linkedRoleIds || []).map(id => roles.find(r => r.id === id)).filter(Boolean);
+    if (linked.length === 0) { dispatch({ type: "SHOW_TOAST", message: `Milestone complete: ${week.milestone || `Week ${week.weekNumber}`}`, toastType: "success" }); return; }
+
+    const signals = [];
+    let nextRoles = roles;
+    for (const role of linked) {
+      try {
+        const res = await callClaudeAPI({ systemPrompt: buildAP05System(data, role, `Completed milestone "${week.milestone || week.title}" in skill track "${track.name}" (${track.type})`), userMessage: "Apply the change and rescore. Respond with ONLY the JSON.", maxTokens: 1200 });
+        const out = parseJsonResponse(res.text);
+        const newTarget = Number(out.newFitTarget) || role.fitTarget;
+        nextRoles = nextRoles.map(r => r.id === role.id ? {
+          ...r, fitTarget: newTarget, fitGap: Math.max(0, newTarget - r.fitBase),
+          segment: out.newSegment || r.segment, subScores: out.newSubScores || r.subScores,
+          lastScored: now, lastActivity: now,
+        } : r);
+        if (out.promotionSignal) signals.push(`${role.role}: ${out.promotionReason || "promotion signal"}`);
+      } catch { /* API unavailable — milestone still recorded */ }
+    }
+    if (nextRoles !== roles) await savePipeline(nextRoles);
+    if (signals.length) dispatch({ type: "SHOW_TOAST", message: `🚀 ${signals[0]}`, toastType: "success" });
+    else dispatch({ type: "SHOW_TOAST", message: `Milestone complete${linked.length ? " · roles rescored" : ""}`, toastType: "success" });
+  };
+
+  const onPractice = (track, week, opId) => {
+    const text = opId === "OP-08" ? buildOP08(track, week, 10) : buildOP07(track, week, 5, "intermediate");
+    setPrompt({ title: opId === "OP-08" ? "Mock Exam (OP-08)" : "Practice Exercises (OP-07)", text });
+  };
+
+  const setStatus = (trackId, status) => saveSkills(tracks.map(t => t.trackId === trackId ? { ...t, status, lastActivity: new Date().toISOString() } : t));
+  const deleteTrack = (trackId) => { saveSkills(tracks.filter(t => t.trackId !== trackId)); setOpenId(null); dispatch({ type: "SHOW_TOAST", message: "Track removed", toastType: "info" }); };
+
+  const activeCount = tracks.filter(t => t.status === "ACTIVE").length;
+  const stalledCount = tracks.filter(trackStalled).length;
 
   return (
     <div className="p-4 space-y-4">
-      <div>
-        <h2 className="text-base font-semibold text-white">Skill Coach</h2>
-        <p className="text-xs text-gray-500 mt-0.5">Certifications, curricula, and practice</p>
+      <div className="flex items-center justify-between">
+        <div>
+          <h2 className="text-base font-semibold text-white">Skill Coach</h2>
+          <p className="text-xs text-gray-500 mt-0.5">{tracks.length} tracks · {activeCount} active{stalledCount ? ` · ${stalledCount} stalled` : ""}</p>
+        </div>
+        <button onClick={() => setAddOpen(true)} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-amber-500/15 text-amber-400 text-xs font-medium hover:bg-amber-500/25 transition-colors"><Plus size={14} />New Track</button>
       </div>
 
-      <div className="grid grid-cols-2 gap-3">
-        <StatCard label="Tracks" value={trackCount} sub="total" icon={GraduationCap} />
-        <StatCard label="Active" value={activeCount} sub="in progress" icon={BarChart3} />
-      </div>
+      {tracks.length === 0 ? (
+        <EmptyState icon={GraduationCap} title="No Skill Tracks" description="Create a track linked to your pipeline roles. The coach builds a weekly curriculum, generates practice, and rescores roles as you complete milestones." action="Create Track" onAction={() => setAddOpen(true)} />
+      ) : (
+        <div className="space-y-2">
+          {tracks.map(t => <TrackCard key={t.trackId} track={t} roles={roles} onOpen={() => setOpenId(t.trackId)} />)}
+        </div>
+      )}
 
-      <EmptyState
-        icon={GraduationCap}
-        title={trackCount === 0 ? "No Skill Tracks" : `${trackCount} Tracks`}
-        description="Create skill tracks linked to your pipeline roles. The coach builds curricula, generates practice exercises, and tracks your progress."
-        action="Create Track"
-        onAction={() => dispatch({ type: "SHOW_TOAST", message: "Skill Coach coming in Batch 6", toastType: "info" })}
+      {prompt && (
+        <div className="fixed inset-0 z-40 bg-black/60 flex items-end justify-center" onClick={() => setPrompt(null)}>
+          <div className="w-full max-w-lg" onClick={e => e.stopPropagation()}>
+            <RawPromptPanel title={prompt.title} tool="ChatGPT" icon={FileText} dispatch={dispatch} allowImport text={prompt.text} tip="Run in ChatGPT, then import the practice-results .md to log your score on this track." />
+            <button onClick={() => setPrompt(null)} className="w-full mt-2 py-2 text-xs text-gray-400 bg-gray-900 rounded-lg border border-white/10">Close</button>
+          </div>
+        </div>
+      )}
+
+      <NewTrackSheet open={addOpen} onClose={() => setAddOpen(false)} onAdd={addTrack} roles={roles} settings={data.settings} />
+      <TrackDrawer
+        track={openTrack} data={data} dispatch={dispatch} generating={generating}
+        onGenerate={generateCurriculum} onToggleTask={toggleTask} onCompleteMilestone={completeMilestone}
+        onPractice={onPractice} onSetStatus={setStatus} onDelete={deleteTrack} onClose={() => setOpenId(null)}
       />
     </div>
   );
@@ -3159,6 +3733,26 @@ export default function CareerOS() {
         await saveData("stars", newStars);
         dispatch({ type: "DATA_UPDATED", key: "stars", value: { ...newStars, lastUpdated: now } });
         toastMsg = `Mock logged · ${used.size} stories rehearsed ✓`;
+      } else if (type === "practice-results") {
+        const pr = parsePracticeResults(parsed.sections);
+        const tracks = state.data.skills.tracks || [];
+        if (tracks.length === 0) throw new Error("Create a skill track before importing practice results");
+        const match = tracks.find(t => t.trackId === pr.trackId)
+          || tracks.slice().sort((a, b) => new Date(b.lastActivity || 0) - new Date(a.lastActivity || 0))[0];
+        const entry = {
+          date: pr.date, source: pr.source, type: pr.type, score: pr.score,
+          totalQuestions: pr.totalQuestions, correct: pr.correct,
+          notes: [pr.weakAreas && `weak: ${pr.weakAreas}`, pr.strongAreas && `strong: ${pr.strongAreas}`].filter(Boolean).join(" · "),
+          importedMd: mdText.slice(0, 4000),
+        };
+        const now = new Date().toISOString();
+        const nextTracks = tracks.map(t => t.trackId === match.trackId
+          ? { ...t, practiceResults: [...(t.practiceResults || []), entry], lastActivity: now }
+          : t);
+        const nextSkills = { ...state.data.skills, tracks: nextTracks };
+        await saveData("skills", nextSkills);
+        dispatch({ type: "DATA_UPDATED", key: "skills", value: { ...nextSkills, lastUpdated: now } });
+        toastMsg = `Practice logged → ${match.name}${pr.score != null ? ` (${pr.score}%)` : ""} ✓`;
       } else if (type === "red-team") {
         const rt = parseRedTeam(parsed.sections);
         const roles = state.data.pipeline.roles || [];
