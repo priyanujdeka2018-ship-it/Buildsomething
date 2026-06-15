@@ -5,7 +5,7 @@ import {
   Loader2, X, FileText, Plus, BarChart3, BookOpen,
   Copy, Sparkles, Users, Brain, ListChecks, ArrowRight,
   Clock, Building2, MapPin, AlertTriangle, Repeat, DollarSign, Wand2,
-  Link2, Lock, Zap, GitBranch
+  Link2, Lock, Zap, GitBranch, Info
 } from "lucide-react";
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from "recharts";
 
@@ -184,6 +184,7 @@ const DEFAULT_SETTINGS = {
   lastBackup: null,
   lastImport: null,
   onboardingComplete: false,
+  welcomeDismissed: false,
   scoringWeights: [
     { dim: 1, name: "Functional Alignment", weight: 20 },
     { dim: 2, name: "Technical/Cert Prereqs", weight: 10 },
@@ -1646,6 +1647,63 @@ function Toast({ message, type, onDismiss }) {
   );
 }
 
+// Inline, library-free info tooltip. Tap toggles; outside tap dismisses.
+function InfoHint({ text }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <span className="relative inline-flex">
+      <button onClick={() => setOpen(o => !o)} aria-label="Zone help" className={`transition-colors ${open ? "text-amber-400" : "text-gray-500 hover:text-gray-300"}`}>
+        <Info size={14} />
+      </button>
+      {open && (
+        <>
+          <div className="fixed inset-0 z-20" onClick={() => setOpen(false)} />
+          <div className="absolute left-0 top-6 z-30 w-60 p-2.5 rounded-lg bg-gray-800 border border-white/10 text-[11px] text-gray-300 leading-relaxed shadow-lg">{text}</div>
+        </>
+      )}
+    </span>
+  );
+}
+
+// First-launch welcome overlay (shown once on a fresh profile).
+function WelcomeCard({ onStart }) {
+  return (
+    <div className="fixed inset-0 z-50 bg-gray-950/90 backdrop-blur flex items-center justify-center p-4">
+      <div className="w-full max-w-sm rounded-xl bg-gray-900 border border-white/10 p-5 space-y-4 shadow-2xl">
+        <div className="flex items-center gap-2">
+          <div className="w-9 h-9 rounded-lg bg-amber-500/15 flex items-center justify-center"><Sparkles size={18} className="text-amber-400" /></div>
+          <div>
+            <h2 className="text-base font-bold text-white tracking-tight">Welcome to Career OS</h2>
+            <p className="text-[11px] text-gray-500">Your career-transition command center</p>
+          </div>
+        </div>
+        <p className="text-xs text-gray-400 leading-relaxed">
+          One app for everything: ingest your career data, score job descriptions, manage your pipeline, prep interviews, and coach your skills.
+        </p>
+        <div className="space-y-2">
+          {[
+            ["1", "Voice-onboard your career", "Use the OP-01 prompt with Gemini, then import the result."],
+            ["2", "Build your STAR stories", "Use OP-02 to capture behavioral interview stories."],
+            ["3", "Score your first JD", "Paste a job description in Analyze for a fit score + playbook."],
+          ].map(([n, title, sub]) => (
+            <div key={n} className="flex gap-2.5 items-start">
+              <span className="w-5 h-5 rounded-full bg-white/10 text-amber-400 text-[10px] font-semibold flex items-center justify-center shrink-0 mt-0.5">{n}</span>
+              <div>
+                <div className="text-xs text-gray-200 font-medium">{title}</div>
+                <div className="text-[10px] text-gray-500 leading-relaxed">{sub}</div>
+              </div>
+            </div>
+          ))}
+        </div>
+        <button onClick={onStart} className="w-full flex items-center justify-center gap-1.5 py-2.5 text-xs font-medium rounded-lg bg-amber-500/15 text-amber-400 hover:bg-amber-500/25 transition-colors">
+          Get Started <ArrowRight size={14} />
+        </button>
+        <p className="text-[10px] text-gray-600 text-center">Your data stays private — stored locally in this artifact.</p>
+      </div>
+    </div>
+  );
+}
+
 // --- Form primitives (used by the onboarding wizard) ---
 
 function Field({ label, value, onChange, placeholder, type = "text" }) {
@@ -2146,7 +2204,10 @@ function ZoneOnboard({ data, dispatch, importNonce }) {
     <div className="p-4 space-y-4">
       <div className="flex items-center justify-between">
         <div>
-          <h2 className="text-base font-semibold text-white">Onboarding</h2>
+          <div className="flex items-center gap-1.5">
+            <h2 className="text-base font-semibold text-white">Onboarding</h2>
+            <InfoHint text="Fill your career profile and STAR stories. Use the voice prompts with Gemini for fastest setup." />
+          </div>
           <p className="text-xs text-gray-500 mt-0.5">Build your career data foundation</p>
         </div>
         <div className="flex items-center gap-2">
@@ -2583,7 +2644,10 @@ function ZonePipeline({ data, dispatch }) {
     <div className="p-4 space-y-4">
       <div className="flex items-center justify-between">
         <div>
-          <h2 className="text-base font-semibold text-white">Pipeline Board</h2>
+          <div className="flex items-center gap-1.5">
+            <h2 className="text-base font-semibold text-white">Pipeline Board</h2>
+            <InfoHint text="Track roles from discovery to offer. Tap a card to move it between columns. Capacity limits (P2/P3B) enforce focus." />
+          </div>
           <p className="text-xs text-gray-500 mt-0.5">{stats.total} roles · {stats.P2}/{caps.P2 || 5} active · {stats.P3B}/{caps.P3B || 7} tracking</p>
         </div>
         <button onClick={() => setAddOpen(true)} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-amber-500/15 text-amber-400 text-xs font-medium hover:bg-amber-500/25 transition-colors">
@@ -2800,7 +2864,7 @@ function ZoneAnalyzer({ data, dispatch }) {
   return (
     <div className="p-4 space-y-4">
       <div>
-        <h2 className="text-base font-semibold text-white">JD Analyzer</h2>
+        <div className="flex items-center gap-1.5"><h2 className="text-base font-semibold text-white">JD Analyzer</h2><InfoHint text="Paste a job description → get a fit score → generate a playbook → red-team it. Save strong roles to your pipeline." /></div>
         <p className="text-xs text-gray-500 mt-0.5">Score a job description, then build a playbook</p>
       </div>
 
@@ -3136,7 +3200,7 @@ function ZonePrep({ data, dispatch }) {
   return (
     <div className="p-4 space-y-4">
       <div>
-        <h2 className="text-base font-semibold text-white">Prep Hub</h2>
+        <div className="flex items-center gap-1.5"><h2 className="text-base font-semibold text-white">Prep Hub</h2><InfoHint text="Browse stories, route BQ questions to stories, run mock interviews, and practice negotiation." /></div>
         <p className="text-xs text-gray-500 mt-0.5">{storyCount} stories · {mapped} BQ patterns mapped · {(data.stars.mockSessions || []).length} mocks</p>
       </div>
 
@@ -3511,7 +3575,7 @@ function ZoneSkills({ data, dispatch }) {
     <div className="p-4 space-y-4">
       <div className="flex items-center justify-between">
         <div>
-          <h2 className="text-base font-semibold text-white">Skill Coach</h2>
+          <div className="flex items-center gap-1.5"><h2 className="text-base font-semibold text-white">Skill Coach</h2><InfoHint text="Build skill tracks from role gaps. Generate curricula, practice exercises, and mock exams; completing milestones rescores linked roles." /></div>
           <p className="text-xs text-gray-500 mt-0.5">{tracks.length} tracks · {activeCount} active{stalledCount ? ` · ${stalledCount} stalled` : ""}</p>
         </div>
         <button onClick={() => setAddOpen(true)} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-amber-500/15 text-amber-400 text-xs font-medium hover:bg-amber-500/25 transition-colors"><Plus size={14} />New Track</button>
@@ -3592,7 +3656,7 @@ function ZoneSettings({ data, dispatch, onSave }) {
   return (
     <div className="p-4 space-y-5">
       <div>
-        <h2 className="text-base font-semibold text-white">Settings</h2>
+        <div className="flex items-center gap-1.5"><h2 className="text-base font-semibold text-white">Settings</h2><InfoHint text="Import/export your data, set your name, and review what's stored. Scoring weights and caps live in the data model." /></div>
         <p className="text-xs text-gray-500 mt-0.5">Configuration and data management</p>
       </div>
 
@@ -3791,6 +3855,13 @@ export default function CareerOS() {
     }
   }, [state.data]);
 
+  const dismissWelcome = useCallback(async () => {
+    const updated = { ...state.data.settings, welcomeDismissed: true };
+    dispatch({ type: "DATA_UPDATED", key: "settings", value: updated });
+    await saveData("settings", updated);
+    dispatch({ type: "SET_ZONE", zone: "onboard" });
+  }, [state.data.settings]);
+
   if (state.loading) {
     return (
       <div className="min-h-screen bg-gray-950 flex items-center justify-center">
@@ -3801,6 +3872,10 @@ export default function CareerOS() {
       </div>
     );
   }
+
+  const showWelcome = !state.data.settings.welcomeDismissed
+    && !state.data.settings.onboardingComplete
+    && !state.data.profile.identity?.name;
 
   const renderZone = () => {
     switch (state.activeZone) {
@@ -3883,6 +3958,9 @@ export default function CareerOS() {
           onDismiss={() => dispatch({ type: "CLEAR_TOAST" })}
         />
       )}
+
+      {/* First-launch welcome */}
+      {showWelcome && <WelcomeCard onStart={dismissWelcome} />}
     </div>
   );
 }
