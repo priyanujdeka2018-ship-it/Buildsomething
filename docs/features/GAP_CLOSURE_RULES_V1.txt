@@ -1,0 +1,80 @@
+GAP_CLOSURE_RULES_V1
+Status: V1 FINAL — R2/R3/R5 folded 2026-07-05 (fold-first disposition; no version bump). Attach to P0. Constitution v1.4 / ES v1.4.5 live.
+
+1. PURPOSE
+Single-file HTML study document (~25 pp) that makes the candidate speak credibly about a role's scorecard gaps in an interview. One build per role, at interview-readiness. Read-and-drill artifact, NOT a skill curriculum.
+
+2. TRIGGER & SOURCING
+Trigger: P5 only, on interview-readiness (interview scheduled or judged imminent for a P2-active or about-to-promote P3A role). Never auto-built for every advancing role. Not P0-native, not P4-triggered.
+Sources:
+ - Playbook (P0)            -> gap list + gap classification
+ - Scorecard sub-scores     -> gap severity -> priority tier
+ - P4 gap-closure status    -> posture per gap (via request handoff; OPTIONAL — see §7)
+ - P1: STAR_STORY_BANK_V3 (translation lab), MASTER_DATABANK_V6 (vocab), SOBHA_REFRAME_TABLE (the reframe)
+
+3. SCOPE BOUNDARY (say/do — locked)
+IN : credible acknowledgment + bridge per gap (what-changed, vocabulary, operating model, interview answer).
+OUT: closing the skill. That is P4 (TRK-##). Must not restate/duplicate P4 study plans. Module test: terminates in something the candidate can SAY -> gap pack. Something they must DO on the job -> P4.
+Posture per gap (from P4 status):
+ - open            -> honest-acknowledgment + bridge ("what I am not claiming")
+ - closed via TRK  -> demonstrate-with-evidence (track work + portfolio as proof)
+ - no track run    -> default to open-posture
+ - status field absent from request -> ALL gaps default to open-posture, pack-wide (R2; no P4 round-trip before build)
+
+4. PAGE ARCHITECTURE (fixed spine, N gap modules)
+Front (4 pp):
+ P1 Cover            - role target, purpose, what-it-is / is-not, master stance, study rule
+ P2 How to use       - four-pass study method, how to read a module, definition of readiness
+ P3 Gap classification - tier each gap (genuine / vocabulary-only / partial); priority logic
+                       (P0 "if this fails interview can fail" / P1 "credible candidates speak
+                       this fluently" / P2 "fast to close, still audible"); posture; one-line thesis
+ P4 7-day sprint     - sequencing rule + minimum-viable-completion
+Gap module (one per gap, weight by tier):
+ (a) what-changed / why-it's-a-gap briefing  - facts to know cold
+ (b) vocabulary decoder                       - terms to speak fluently + corrections
+                                                (= Sobha->target reframe for this domain)
+ (c) operating model / operational read       - how ops affects the outcome the role cares about
+ (d) interview answer                         - 2-min + 60-sec, safe phrases, phrases-to-avoid,
+                                                >=5 recall questions, one-line close; heavier gaps
+                                                add mini-case / hands-on exercise / templates
+Back (cross-cutting):
+ Story Translation Lab - six rules (don't change facts; change vocabulary; keep metrics; map
+                         Sobha->target ops; don't claim AI-data work; emphasize operating
+                         discipline) + story-mapping table + one fully rewritten STAR exemplar
+ Active Recall + Mock Drill - no-notes recall sheet + 8 mock Qs w/ answer shapes + night-before checklist
+ Source Calibration appendix - every external claim tagged verified / softened / unconfirmed
+
+5. DENSITY FLOORS & CEILING
+ genuine gap >= 3 pp; vocabulary-only >= 2 pp; partial >= 2 pp.
+ every gap module ends in >=1 full 2-min answer + recall questions (no module without a say-terminal).
+ ~25 pp target for a 5-gap role; front+back fixed ~9 pp, modules fill the rest; scale proportionally.
+ HARD CEILING: <=32 pp (R3). Roles with >6 gaps: compress P2-tier gaps to 1-pp vocab cards
+ (term -> credible-articulation line -> one proof point); other tiers keep full modules.
+ Ceiling breach = build error, not a formatting choice.
+
+6. SOURCE INTEGRITY (non-negotiable, Constitution 13.6)
+ Every company/external claim carries a calibration tag. Unconfirmed facts flagged, never asserted. Source Calibration appendix is MANDATORY — a pack without it is not shippable. Softened claims softened in-body, not only in the appendix.
+
+7. REQUEST HANDOFF (P5 -> P0)
+ ---GAP CLOSURE REQUEST FOR P0---
+ From: P5
+ Role: [title] at [company] | Slug: [slug]
+ Playbook reference: [filename in P0 knowledge]
+ Gaps to cover: [list, or "all gaps in playbook card"]
+ Gap-closure status (per gap, from P4): [gap -> open / closed-via-TRK-## / partial]
+   — OPTIONAL field (R2). If absent, build at all-open posture; no P4 round-trip before build.
+ Interview date / stage: [drives sprint compression]
+ ---END REQUEST---
+
+8. RETURN HANDOFF (P0 -> P5, + P1 log copy) — UNIFIED MANIFEST (R5, shared format modes 2-4)
+ ---P0 RETURN MANIFEST---
+ Artifact: gap pack — [role] at [company] | Slug: [slug] | File: [filename]
+ Trigger: [P5 GAP CLOSURE REQUEST, date]
+ Coverage: [gaps covered, each w/ tier + posture (open / closed-via-TRK-## / partial)]
+ Ceilings: [n] pp vs <=32
+ Source-calibration flags raised: [unconfirmed/softened claims surfaced]
+ P1 SOURCE UPDATE SUGGESTED: [content | none]
+ Return: P5 (consumer) + P1 (log) — P1 action: log artifact exists for role; no canonical change
+ ---END MANIFEST---
+
+FOLD LOG: R2 -> §2/§3/§7 · R3 -> §5 · R5 -> §8 (2026-07-05, P1 wiring session). Build starts from GAP_PACK_TEMPLATE.html (R1 shell) — fill, never restructure.

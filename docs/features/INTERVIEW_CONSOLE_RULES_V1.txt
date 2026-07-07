@@ -1,0 +1,55 @@
+INTERVIEW_CONSOLE_RULES_V1
+Status: V1 FINAL — R4/R5 folded 2026-07-05 (fold-first disposition; no version bump). Attach to P0. Constitution v1.4 / ES v1.4.5 live.
+
+1. PURPOSE
+Single-file, vanilla-JS interactive rehearsal tool. Renders + drills STAR delivery and interview-round simulation for one role. In-memory state only; resets on reload by design. Instrument, not document. Generates no new content — renders playbook + STAR bank material.
+
+2. TRIGGER & SOURCING
+Trigger: P5 only, on interview-readiness — typically tighter than the gap pack (built when rounds are actually scheduled, since it is round-structured). Not P0-native, not P4-triggered.
+Sources:
+ - Playbook (P0)            -> round structure, say/don't-say, control-system vocabulary
+ - STAR_STORY_BANK_V3 (P1)  -> featured stories by S-code
+ - P1                       -> role-specific positioning
+
+3. CCC DATA CONTRACT (standalone, taxonomy-shared)
+ Consumes stories by S-code (S1-S36) + their 12-enum CCC category. Does NOT import CCC/P6 rendering — no P0<->P6 code dependency. Layers its own four-axis DELIVERY rubric on top (which CCC lacks). Category taxonomy shared; delivery rubric console-native; rendering standalone.
+
+4. STRUCTURE
+ Tabbed STAR rack: brief · reference · [featured stories, one tab per story] for this role's rounds.
+ The gauntlet: each STAR card self-rated on four delivery axes —
+   Structure · Specificity · Vocabulary · Assertiveness — with star ratings.
+   Assertiveness is a FIXED axis (candidate DISC dev area); stories carrying assertiveness
+   proof-point tags (PR-rejection / NPV-defence / risk-register) flagged as such.
+   Progressive disclosure (reveal/hide) for quiz mode; click-to-mark "solid"; live counter
+   tally; resets on reload.
+ Cheat sheets: Say / Don't say / The control system (vocabulary). "Don't say" -> traps.
+ Round-by-round: four possible stages — Recruiter screen · Hiring manager (behavioral + scenario) ·
+   Cross-functional panel · Executive round — each with reveal/hide practice beats.
+   Stage set = the rounds listed in the request ONLY (R4). Never a silent default to all four;
+   "all" must be explicitly requested. Round list missing from request -> bounce back to P5;
+   do not assume.
+
+5. STATE CONSTRAINT (hard)
+ In-memory JS object ONLY. No localStorage / sessionStorage / window.storage / cookies / any persistence. Marks, counters, reveal toggles live for the session, reset on reload. Design property, not a limitation — keep it.
+
+6. REQUEST HANDOFF (P5 -> P0)
+ ---INTERVIEW CONSOLE REQUEST FOR P0---
+ From: P5
+ Role: [title] at [company] | Slug: [slug]
+ Playbook reference: [filename in P0 knowledge]
+ Rounds to build: [recruiter / HM / panel / exec / all] — REQUIRED field (R4)
+ STAR stories to feature: [S-codes + CCC category, or "P5 selects from playbook mapping"]
+ Interview date: [drives urgency]
+ ---END REQUEST---
+
+7. RETURN HANDOFF (P0 -> P5, + P1 log copy) — UNIFIED MANIFEST (R5, shared format modes 2-4)
+ ---P0 RETURN MANIFEST---
+ Artifact: console — [role] at [company] | Slug: [slug] | File: [filename]
+ Trigger: [P5 INTERVIEW CONSOLE REQUEST, date]
+ Coverage: [rounds built + featured S-codes]
+ Ceilings: rounds built vs rounds requested
+ P1 SOURCE UPDATE SUGGESTED: [content | none]
+ Return: P5 (consumer) + P1 (log) — P1 action: log artifact exists for role; no canonical change
+ ---END MANIFEST---
+
+FOLD LOG: R4 -> §4/§6 (replaces prior "default = all four" clause — direct conflict resolved in R4's favour) · R5 -> §7 (2026-07-05, P1 wiring session). Build starts from CONSOLE_SHELL.html (R1 shell) — fill, never restructure.
