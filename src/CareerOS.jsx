@@ -1355,6 +1355,7 @@ function makeRoleFromScore(score, jdText, settings, playbookBuilt) {
     starIds: score.suggestedStarIds || [], aiProjects: [], portfolioRelevance: "",
     resumeStatus: "PENDING", resumeVersion: null,
     playbookStatus: playbookBuilt ? "BUILT" : "PENDING", coverNoteStatus: "PENDING",
+    gapPackStatus: "PENDING", consoleStatus: "PENDING", gapPackBuiltAt: null, consoleBuiltAt: null,
     stageTracker: { currentStage: playbookBuilt ? "PLAYBOOKED" : "RESEARCHED", lastUpdated: now, history: [{ stage: "RESEARCHED", date: now, note: "Scored via JD Analyzer" }] },
     referrals: [], redTeamFindings: [],
     intakeDate: now, lastScored: now, lastActivity: now,
@@ -1378,6 +1379,961 @@ function parseRedTeam(sections) {
     findings: parts.join("\n\n"),
     gaps, strengthening, flags,
   };
+}
+
+// ============================================================
+// SECTION 5C: GAP PACK + INTERVIEW CONSOLE (AP-07 / AP-08)
+// Per-role artifact generators. API returns structured JSON;
+// the app assembles HTML client-side from the embedded templates
+// (fill, never restructure). Generated HTML is never persisted —
+// only a status flag on the role card. See GAP_PACK_CONSOLE_SPEC.md.
+// ============================================================
+
+// Embedded template shells (verbatim from docs/features/, with invisible
+// <!--R:name-->…<!--/R:name--> repeat markers added around exemplar rows only).
+const GAP_PACK_TEMPLATE_HTML = `<!DOCTYPE html>
+<!-- R1 SHELL: GAP_PACK_TEMPLATE.html - extracted 2026-07-05 from Scale AI gap-closure reference pack.
+     Build per GAP_CLOSURE_RULES_V1. Fill {{TOKENS}}; never restructure.
+     Spine: front 4pp -> N gap modules (density floors rules 5; <=32pp HARD CEILING; >6 gaps: P2-tier -> 1pp
+     vocab cards) -> back: Translation Lab · Active Recall + Mock Drill · SOURCE CALIBRATION APPENDIX
+     (MANDATORY rules 6 - absent from the Scale reference; added here, do not drop). -->
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>{{ROLE}} - Gap Closure Reading Pack</title>
+  <style>
+:root {
+  --ink: #172033;
+  --muted: #5f6b7a;
+  --line: #d9e1e8;
+  --navy: #234f73;
+  --teal: #0f766e;
+  --green: #e9f7f4;
+  --blue-soft: #edf5fb;
+  --paper: #ffffff;
+  --bg: #f5f7fa;
+  --code: #f3f6f9;
+}
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+body {
+  margin: 0;
+  color: var(--ink);
+  background: var(--bg);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  line-height: 1.55;
+  font-size: 16px;
+}
+a { color: #095c9e; text-decoration: none; }
+a:hover { text-decoration: underline; }
+header.hero {
+  background: linear-gradient(135deg, #173a5e 0%, #245475 58%, #0f766e 100%);
+  color: white;
+  padding: 44px 48px 34px;
+  border-bottom: 6px solid rgba(255,255,255,.25);
+}
+.hero h1 { margin: 0 0 10px; font-size: 34px; line-height: 1.12; letter-spacing: -.02em; }
+.hero p { margin: 6px 0; max-width: 1100px; color: rgba(255,255,255,.92); }
+.hero .meta { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 22px; }
+.hero .pill { border: 1px solid rgba(255,255,255,.3); border-radius: 999px; padding: 6px 12px; font-size: 13px; background: rgba(255,255,255,.12); }
+.layout { display: grid; grid-template-columns: 300px 1fr; gap: 28px; max-width: 1280px; margin: 28px auto; padding: 0 24px; }
+aside.toc { align-self: start; position: sticky; top: 16px; max-height: calc(100vh - 32px); overflow: auto; background: var(--paper); border: 1px solid var(--line); border-radius: 16px; padding: 18px; box-shadow: 0 10px 22px rgba(10, 31, 51, .06); }
+.toc h2 { font-size: 15px; margin: 0 0 12px; text-transform: uppercase; letter-spacing: .08em; color: var(--navy); }
+.toc-list { margin: 0; padding-left: 22px; font-size: 13px; }
+.toc-list li { margin: 7px 0; }
+main { min-width: 0; }
+.frontmatter, .page-card {
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  padding: 36px 42px;
+  margin-bottom: 28px;
+  box-shadow: 0 12px 28px rgba(10, 31, 51, .07);
+  position: relative;
+}
+.page-label { position: absolute; top: 18px; right: 22px; color: var(--muted); font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: .08em; }
+h1, h2, h3, h4 { color: var(--ink); line-height: 1.22; }
+h1 { font-size: 32px; margin-top: 0; letter-spacing: -.015em; }
+h2 { font-size: 25px; margin: 0 0 22px; padding-bottom: 10px; border-bottom: 3px solid var(--navy); color: var(--navy); }
+h3 { font-size: 18px; margin-top: 26px; color: #20364f; }
+h4 { font-size: 16px; margin-top: 22px; color: #20364f; }
+p { margin: 10px 0; }
+ul, ol { padding-left: 24px; }
+li { margin: 5px 0; }
+strong { color: #10243a; }
+blockquote {
+  margin: 18px 0;
+  padding: 14px 18px;
+  border-left: 5px solid var(--teal);
+  background: var(--green);
+  border-radius: 10px;
+}
+table { width: 100%; border-collapse: collapse; margin: 18px 0 24px; font-size: 14px; }
+th { background: var(--navy); color: white; text-align: left; font-weight: 700; }
+th, td { border: 1px solid #cfd8e3; padding: 9px 10px; vertical-align: top; }
+tr:nth-child(even) td { background: #f8fafc; }
+code { background: var(--code); padding: 2px 5px; border-radius: 5px; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: .92em; }
+pre { background: #0f172a; color: #e5e7eb; padding: 16px; border-radius: 12px; overflow: auto; border: 1px solid #1e293b; }
+pre code { background: transparent; color: inherit; padding: 0; }
+hr { border: none; border-top: 1px solid var(--line); margin: 28px 0; }
+.page-card h2 + h1 { margin-top: 0; }
+.page-card h1 { color: #12243a; }
+.frontmatter h1 { color: var(--navy); }
+@media (max-width: 900px) {
+  .layout { display: block; padding: 0 14px; }
+  aside.toc { position: static; max-height: none; margin-bottom: 22px; }
+  header.hero { padding: 30px 22px; }
+  .frontmatter, .page-card { padding: 28px 22px; border-radius: 14px; }
+  .page-label { position: static; margin-bottom: 8px; }
+  table { font-size: 13px; display: block; overflow-x: auto; }
+}
+@media print {
+  body { background: white; font-size: 11.5pt; }
+  header.hero, aside.toc { display: none; }
+  .layout { display: block; max-width: none; margin: 0; padding: 0; }
+  .frontmatter, .page-card { box-shadow: none; border: none; border-radius: 0; margin: 0; padding: 22mm 16mm; page-break-after: always; }
+  .page-card { break-after: page; }
+  h2 { font-size: 19pt; }
+  h1 { font-size: 22pt; }
+  table { font-size: 8.5pt; page-break-inside: avoid; }
+  pre { white-space: pre-wrap; }
+  a { color: #000; text-decoration: none; }
+}
+</style>
+</head>
+<body>
+  <header class="hero">
+    <h1>{{ROLE}} - Gap Closure Reading Pack</h1>
+    <p>{{N}}-page interview-readiness pack for Priyanuj Deka.</p>
+    <p>Role target: {{ROLE}}. Purpose: final gap-closure sprint before interview.</p>
+    <div class="meta">
+      <span class="pill">Date: {{BUILD_DATE}}</span>
+      <span class="pill">Interview-first</span>
+      <span class="pill">Gap honesty</span>
+      <span class="pill">{{TARGET}}-ready STAR translation</span>
+    </div>
+  </header>
+  <div class="layout">
+    <aside class="toc">
+      <h2>Contents</h2>
+      <ol class="toc-list">
+        <li><a href="#page-1">Page 1 - Cover Page</a></li>
+        <li><a href="#page-2">Page 2 - How to Use This Pack</a></li>
+        <li><a href="#page-3">Page 3 - Gap Classification Summary</a></li>
+        <li><a href="#page-4">Page 4 - Recommended 7-Day Reading Sprint</a></li>
+        <!-- One li per module page: "Page n - Module M: {{GAP}} - {{SUBPAGE}}"
+             Subpages: (a) what-changed, (b) vocabulary, (c) operating model, (d) interview answer;
+             weight by tier per rules 5 -->
+        <li><a href="#page-N3">Page N-3 - Story Translation Lab</a></li>
+        <li><a href="#page-N2">Page N-2 - Active Recall Sheet</a></li>
+        <li><a href="#page-N1">Page N-1 - Mock Interview Drill</a></li>
+        <li><a href="#page-N0">Page N - Source Calibration Appendix</a></li>
+      </ol>
+    </aside>
+    <main>
+      <section class="frontmatter">
+        <h1>{{ROLE}} - Gap Closure Reading Pack</h1>
+<p><strong>{{N}}-page interview-readiness pack for Priyanuj Deka</strong><br />
+<strong>Role target:</strong> {{ROLE}}<br />
+<strong>Purpose:</strong> Final gap-closure sprint before interview<br />
+<strong>Date:</strong> {{BUILD_DATE}}</p>
+<hr />
+      </section>
+
+      <section class="page-card" data-page="1">
+<div class="page-label">Page 1</div>
+<h2 id="page-1">Page 1 - Cover Page</h2>
+<h1>{{ROLE}} - Gap Closure Reading Pack</h1>
+<h3>Role target</h3><p>{{ROLE_TARGET_SENTENCE}}</p>
+<h3>Purpose</h3><p>{{PURPOSE - closes N gaps; not a domain-veteran costume; senior operator who studied the domain and translates Sobha evidence into {{TARGET}} language}}</p>
+<h3>What this pack is / is not</h3><ul><!--R:isnot--><li>{{IS_IS_NOT_BULLETS}}</li><!--/R:isnot--></ul>
+<h3>Master stance</h3><p>{{ONE_PARAGRAPH_STANCE}}</p>
+<h3>Study rule</h3><p>{{STUDY_RULE}}</p>
+</section>
+
+<section class="page-card" data-page="2">
+<div class="page-label">Page 2</div>
+<h2 id="page-2">Page 2 - How to Use This Pack</h2>
+<h3>Four-pass study method</h3><p>{{PASS_1_TO_4}}</p>
+<h3>How to read a module</h3><p>{{MODULE_READING_GUIDE}}</p>
+<h3>Definition of readiness</h3><p>{{READINESS_DEFINITION}}</p>
+</section>
+
+<section class="page-card" data-page="3">
+<div class="page-label">Page 3</div>
+<h2 id="page-3">Page 3 - Gap Classification Summary</h2>
+<p>Tier each gap: genuine / vocabulary-only / partial. Priority: P0 "if this fails, interview can fail" ·
+P1 "credible candidates speak this fluently" · P2 "fast to close, still audible". Posture per gap from the
+request (open / closed-via-TRK-## / partial; status field absent -> ALL open, R2).</p>
+<!--R:classification--><h3>{{GAP_M}}: {{TIER}} · {{PRIORITY}} · {{POSTURE}}</h3><p>{{ONE_LINE_THESIS}}</p><!--/R:classification-->
+</section>
+
+<section class="page-card" data-page="4">
+<div class="page-label">Page 4</div>
+<h2 id="page-4">Page 4 - Recommended 7-Day Reading Sprint</h2>
+<p>{{SEQUENCING_RULE}} · Minimum-viable-completion: {{MVC}} · Interview-date compression: {{COMPRESSION_NOTE}}</p>
+</section>
+
+<!-- ============ GAP MODULE EXEMPLAR (repeat per gap; weight by tier; P2-tier under >6 gaps
+     collapses to a single 1pp vocab-card page: term -> credible-articulation line -> one proof point) ============ -->
+<!--R:module--><section class="page-card" data-page="M-a">
+<div class="page-label">Page {{n}}</div>
+<h2 id="page-{{n}}">Page {{n}} - Module {{M}}: {{GAP}} - What Changed / Why It's a Gap</h2>
+<p>{{FACTS_TO_KNOW_COLD - every external claim carries a calibration tag (verified/softened/unconfirmed)}}</p>
+</section>
+
+<section class="page-card" data-page="M-b">
+<div class="page-label">Page {{n}}</div>
+<h2 id="page-{{n}}">Page {{n}} - Module {{M}}: Vocabulary Decoder</h2>
+<table><thead><tr><th>Term</th><th>What it means</th><th>Sobha equivalent</th><th>Say it as</th></tr></thead>
+<tbody><!--R:decoder--><tr><td>{{TERM}}</td><td>{{MEANING}}</td><td>{{SOBHA_EQ}}</td><td>{{SPOKEN_FORM}}</td></tr><!--/R:decoder--></tbody></table>
+</section>
+
+<section class="page-card" data-page="M-c">
+<div class="page-label">Page {{n}}</div>
+<h2 id="page-{{n}}">Page {{n}} - Module {{M}}: Operating Model / Operational Read</h2>
+<p>{{HOW_OPS_AFFECTS_THE_OUTCOME_THIS_ROLE_CARES_ABOUT}}</p>
+</section>
+
+<section class="page-card" data-page="M-d">
+<div class="page-label">Page {{n}}</div>
+<h2 id="page-{{n}}">Page {{n}} - Module {{M}}: Interview Answer</h2>
+<h3>Prompt</h3><p>"{{LIKELY_QUESTION}}"</p>
+<h3>2-minute answer</h3><p>{{FULL_ANSWER}}</p>
+<h3>60-second version</h3><p>{{COMPRESSED_ANSWER}}</p>
+<h3>Safe phrases</h3><ul><!--R:safe--><li>{{SAFE}}</li><!--/R:safe--></ul>
+<h3>Phrases to avoid</h3><ul><!--R:avoid--><li>{{AVOID}}</li><!--/R:avoid--></ul>
+<h3>Recall questions (5 or more)</h3><ol><!--R:recall--><li>{{RECALL_Q}}</li><!--/R:recall--></ol>
+<h3>One-line close</h3><p>{{CLOSE}}</p>
+<!-- Heavier (genuine) gaps add: mini-case / hands-on exercise / templates.
+     Every module MUST end in a say-terminal (full 2-min answer + recall) - rules 5. -->
+</section>
+<!--/R:module-->
+
+<!-- ============ BACK MATTER ============ -->
+<section class="page-card" data-page="N-3">
+<div class="page-label">Page {{N-3}}</div>
+<h2 id="page-N3">Story Translation Lab</h2>
+<p>Six rules: don't change facts · change vocabulary · keep metrics · map Sobha to {{TARGET}} ops ·
+don't claim AI-data work · emphasize operating discipline.</p>
+<h3>Story mapping table</h3>
+<table><thead><tr><th>S-code</th><th>Sobha framing</th><th>{{TARGET}} framing</th><th>Use for</th></tr></thead>
+<tbody><!--R:storymap--><tr><td>{{S##}}</td><td>{{FROM}}</td><td>{{TO}}</td><td>{{QUESTION_TYPE}}</td></tr><!--/R:storymap--></tbody></table>
+<h3>Sample rewritten STAR story</h3><p>{{ONE_FULLY_REWRITTEN_EXEMPLAR}}</p>
+</section>
+
+<section class="page-card" data-page="N-2">
+<div class="page-label">Page {{N-2}}</div>
+<h2 id="page-N2">Active Recall Sheet</h2>
+<p>No-notes recall: {{PROMPT_LIST}}</p>
+</section>
+
+<section class="page-card" data-page="N-1">
+<div class="page-label">Page {{N-1}}</div>
+<h2 id="page-N1">Mock Interview Drill</h2>
+<h3>Eight mock questions with answer shapes</h3><ol><!--R:mockq--><li>{{MOCK_Q - answer shape}}</li><!--/R:mockq--></ol>
+<h3>Night-before checklist</h3><ul><!--R:checklist--><li>{{CHECKLIST_ITEM}}</li><!--/R:checklist--></ul>
+</section>
+
+<section class="page-card" data-page="N-0">
+<div class="page-label">Page {{N}}</div>
+<h2 id="page-N0">Source Calibration Appendix (MANDATORY - rules 6)</h2>
+<p>Every company/external claim in this pack, tagged. Softened claims are softened in-body too, not only here.
+A pack without this page is not shippable.</p>
+<table><thead><tr><th>Claim</th><th>Page</th><th>Tag</th><th>Basis / source</th></tr></thead>
+<tbody><!--R:calibration--><tr><td>{{CLAIM}}</td><td>{{n}}</td><td>verified | softened | unconfirmed</td><td>{{BASIS}}</td></tr><!--/R:calibration--></tbody></table>
+</section>
+
+    </main>
+  </div>
+</body>
+</html>
+`;
+const CONSOLE_SHELL_HTML = `<!DOCTYPE html>
+<!-- R1 SHELL: CONSOLE_SHELL.html - extracted 2026-07-05 from Scale AI OPM reference console.
+     Build per INTERVIEW_CONSOLE_RULES_V1. Fill {{TOKENS}}; never restructure.
+     R4: include ONLY requested rounds - delete unrequested stage tabs + panels + Q keys; engine adapts.
+     State: in-memory only (rules 5). Four-axis rubric block below is STANDING content - keep verbatim. -->
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>{{ROLE}} - Interview Readiness Console</title>
+<style>
+  :root{
+    --bg:#F5F6F9; --surface:#FFFFFF; --surface-2:#FBFBFD;
+    --ink:#14161D; --ink-soft:#545A68; --ink-faint:#8A909D;
+    --line:#E3E6EC; --line-strong:#CBD0DA;
+    --accent:#2B41C9; --accent-deep:#1E2F9E; --accent-tint:#ECEEFB; --accent-tint-2:#F4F5FD;
+    --solid:#1B8A57; --solid-bg:#E7F4EE; --solid-line:#B7E0CC;
+    --shaky:#A96A05; --shaky-bg:#FBF1DD; --shaky-line:#ECD5A6;
+    --redo:#BC3030; --redo-bg:#FAE9E9; --redo-line:#EBC2C2;
+    --display:'Space Grotesk',-apple-system,BlinkMacSystemFont,sans-serif;
+    --body:'IBM Plex Sans',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+    --mono:'IBM Plex Mono',ui-monospace,'SF Mono',Menlo,monospace;
+    --r:10px; --shadow:0 1px 2px rgba(20,22,29,.04),0 4px 16px rgba(20,22,29,.05);
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html{scroll-behavior:smooth}
+  body{background:var(--bg);color:var(--ink);font-family:var(--body);font-size:15.5px;line-height:1.6;-webkit-font-smoothing:antialiased;padding-bottom:64px}
+  h1,h2,h3,h4{font-family:var(--display);line-height:1.18;letter-spacing:-.01em}
+  a{color:var(--accent);text-decoration:none}
+  a:hover{text-decoration:underline}
+  .mono{font-family:var(--mono)}
+  .wrap{max-width:880px;margin:0 auto;padding:0 18px}
+
+  /* ---------- TOP BAR ---------- */
+  .topbar{position:sticky;top:0;z-index:50;background:rgba(245,246,249,.86);backdrop-filter:saturate(160%) blur(10px);border-bottom:1px solid var(--line)}
+  .topbar-inner{max-width:880px;margin:0 auto;padding:11px 18px;display:flex;align-items:center;gap:14px;flex-wrap:wrap}
+  .brand{display:flex;flex-direction:column;gap:1px;margin-right:auto}
+  .eyebrow{font-family:var(--mono);font-size:10.5px;letter-spacing:.18em;text-transform:uppercase;color:var(--accent);font-weight:600}
+  .brand b{font-family:var(--display);font-weight:700;font-size:15px;letter-spacing:-.02em}
+  .readout{display:flex;gap:7px;align-items:center;font-family:var(--mono);font-size:11.5px;font-weight:500}
+  .rd{display:inline-flex;align-items:center;gap:4px;padding:3px 8px;border-radius:20px;border:1px solid var(--line-strong);background:var(--surface)}
+  .rd b{font-weight:600}
+  .dot{width:7px;height:7px;border-radius:50%;display:inline-block}
+  .dot.s{background:var(--solid)} .dot.k{background:var(--shaky)} .dot.r{background:var(--redo)}
+  .btn{font-family:var(--mono);font-size:11.5px;font-weight:500;border:1px solid var(--line-strong);background:var(--surface);color:var(--ink-soft);padding:5px 10px;border-radius:8px;cursor:pointer;transition:.12s}
+  .btn:hover{border-color:var(--accent);color:var(--accent)}
+  .btn:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+
+  /* ---------- TABS / STAGE SPINE ---------- */
+  .tabs{position:sticky;top:53px;z-index:40;background:var(--bg);border-bottom:1px solid var(--line)}
+  .tabs-scroll{max-width:880px;margin:0 auto;padding:0 12px;display:flex;gap:2px;overflow-x:auto;-webkit-overflow-scrolling:touch}
+  .tabs-scroll::-webkit-scrollbar{height:0}
+  .tab{flex:0 0 auto;display:flex;align-items:center;gap:7px;padding:11px 13px;border:none;background:none;cursor:pointer;color:var(--ink-faint);font-family:var(--display);font-weight:600;font-size:13px;border-bottom:2px solid transparent;white-space:nowrap;transition:.12s}
+  .tab:hover{color:var(--ink-soft)}
+  .tab[aria-selected="true"]{color:var(--accent);border-bottom-color:var(--accent)}
+  .tab .num{font-family:var(--mono);font-size:11px;background:var(--accent-tint);color:var(--accent);width:19px;height:19px;border-radius:5px;display:inline-grid;place-items:center;font-weight:600}
+  .tab[aria-selected="true"] .num{background:var(--accent);color:#fff}
+  .tab .cnt{font-family:var(--mono);font-size:10px;color:var(--solid);font-weight:600}
+  .tab:focus-visible{outline:2px solid var(--accent);outline-offset:-2px;border-radius:4px}
+
+  /* ---------- PANELS ---------- */
+  .panel{display:none;padding:28px 0 8px}
+  .panel.active{display:block;animation:fade .25s ease}
+  @keyframes fade{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+  .stage-head{margin-bottom:18px}
+  .stage-head .eyebrow{margin-bottom:5px}
+  .stage-head h2{font-size:25px;font-weight:700;margin-bottom:6px}
+  .stage-head p{color:var(--ink-soft);font-size:14.5px;max-width:62ch}
+  .stage-actions{margin:14px 0 4px;display:flex;gap:8px}
+
+  /* ---------- CARDS ---------- */
+  .card{background:var(--surface);border:1px solid var(--line);border-left:3px solid var(--line-strong);border-radius:var(--r);box-shadow:var(--shadow);margin-bottom:14px;overflow:hidden;transition:border-color .15s}
+  .card.is-solid{border-left-color:var(--solid)}
+  .card.is-shaky{border-left-color:var(--shaky)}
+  .card.is-redo{border-left-color:var(--redo)}
+  .card-top{padding:15px 17px 13px}
+  .qmeta{display:flex;align-items:center;gap:8px;margin-bottom:9px;flex-wrap:wrap}
+  .qno{font-family:var(--mono);font-size:11px;font-weight:600;color:var(--ink-faint)}
+  .tag{font-family:var(--mono);font-size:10px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;padding:2px 7px;border-radius:5px}
+  .t-beh{background:var(--accent-tint);color:var(--accent-deep)}
+  .t-scn{background:#FBEFE3;color:#9A5A12}
+  .t-sys{background:#E7F0F4;color:#235B72}
+  .t-comp{background:#EFEAF7;color:#5B3B86}
+  .t-screen{background:#E9F2EC;color:#1E6B47}
+  .prompt{font-size:16px;line-height:1.5;color:var(--ink)}
+  .prompt .q{font-weight:500}
+  .reveal-btn{margin-top:12px;font-family:var(--mono);font-size:12px;font-weight:500;color:var(--accent);background:var(--accent-tint-2);border:1px solid var(--line);padding:7px 12px;border-radius:8px;cursor:pointer;display:inline-flex;align-items:center;gap:7px;transition:.12s}
+  .reveal-btn:hover{background:var(--accent-tint)}
+  .reveal-btn:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+  .reveal-btn .chev{transition:transform .2s}
+  .reveal-btn[aria-expanded="true"] .chev{transform:rotate(90deg)}
+
+  .direction{display:none;border-top:1px dashed var(--line-strong);background:var(--surface-2);padding:0 17px}
+  .direction.open{display:block;padding:15px 17px 16px}
+  .dline{display:grid;grid-template-columns:74px 1fr;gap:10px;padding:7px 0;border-bottom:1px solid var(--line)}
+  .dline:last-of-type{border-bottom:none}
+  .dlabel{font-family:var(--mono);font-size:10.5px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;color:var(--ink-faint);padding-top:2px}
+  .dval{font-size:14.5px;line-height:1.55}
+  .dval .scode{font-family:var(--mono);font-weight:600;color:var(--accent-deep);font-size:13px;background:var(--accent-tint);padding:1px 6px;border-radius:5px;white-space:nowrap}
+  .keyline{font-style:italic;color:var(--ink);background:#fff;border-left:2px solid var(--accent);padding:8px 11px;border-radius:0 6px 6px 0;font-size:14.5px}
+  .trap{color:var(--redo);font-weight:500}
+  .trap::before{content:"⚠ ";font-weight:700}
+
+  /* ---------- SELF SCORE ---------- */
+  .score{display:flex;align-items:center;gap:8px;padding:11px 17px;border-top:1px solid var(--line);background:var(--surface)}
+  .score-q{font-family:var(--mono);font-size:11px;color:var(--ink-faint);margin-right:auto}
+  .sbtn{font-family:var(--mono);font-size:11px;font-weight:600;border:1px solid var(--line-strong);background:#fff;color:var(--ink-soft);padding:5px 11px;border-radius:7px;cursor:pointer;transition:.1s}
+  .sbtn:hover{border-color:var(--ink-soft)}
+  .sbtn:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+  .sbtn[data-s="solid"].on{background:var(--solid-bg);border-color:var(--solid-line);color:var(--solid)}
+  .sbtn[data-s="shaky"].on{background:var(--shaky-bg);border-color:var(--shaky-line);color:var(--shaky)}
+  .sbtn[data-s="redo"].on{background:var(--redo-bg);border-color:var(--redo-line);color:var(--redo)}
+
+  /* ---------- REFERENCE / PROSE BLOCKS ---------- */
+  .block{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);box-shadow:var(--shadow);margin-bottom:14px}
+  .block-h{width:100%;text-align:left;padding:15px 17px;background:none;border:none;cursor:pointer;display:flex;align-items:center;gap:10px;font-family:var(--display);font-weight:600;font-size:16px;color:var(--ink)}
+  .block-h:focus-visible{outline:2px solid var(--accent);outline-offset:-2px;border-radius:var(--r)}
+  .block-h .chev{margin-left:auto;color:var(--ink-faint);transition:transform .2s}
+  .block-h[aria-expanded="true"] .chev{transform:rotate(90deg)}
+  .block-h .ticker{font-family:var(--mono);font-size:10.5px;background:var(--accent-tint);color:var(--accent-deep);padding:2px 7px;border-radius:5px;font-weight:600}
+  .block-body{display:none;padding:0 17px 18px;border-top:1px solid var(--line)}
+  .block-body.open{display:block}
+  .block-body p{margin:11px 0;color:var(--ink-soft)}
+  .block-body p strong{color:var(--ink)}
+  .block-body h4{font-size:13.5px;margin:16px 0 6px;color:var(--ink);font-family:var(--display);font-weight:600;letter-spacing:.01em}
+  .block-body ul{margin:8px 0 8px 2px;list-style:none}
+  .block-body li{position:relative;padding-left:18px;margin:6px 0;color:var(--ink-soft)}
+  .block-body li::before{content:"";position:absolute;left:2px;top:9px;width:5px;height:5px;border-radius:1px;background:var(--accent)}
+  .pill{font-family:var(--mono);font-size:11px;font-weight:600;color:var(--accent-deep);background:var(--accent-tint);padding:1px 6px;border-radius:5px;white-space:nowrap}
+
+  .fact-grid{display:grid;grid-template-columns:1fr 1fr;gap:9px;margin:10px 0}
+  .fact{background:var(--surface-2);border:1px solid var(--line);border-radius:8px;padding:10px 12px}
+  .fact b{display:block;font-family:var(--display);font-size:13px;margin-bottom:2px;color:var(--ink)}
+  .fact span{font-size:13px;color:var(--ink-soft);line-height:1.45}
+
+  .vocab{width:100%;border-collapse:collapse;font-size:13.5px;margin-top:8px}
+  .vocab td{padding:8px 10px;border-bottom:1px solid var(--line);vertical-align:top}
+  .vocab tr td:first-child{color:var(--ink-faint);font-family:var(--mono);font-size:12px;width:46%}
+  .vocab tr td:last-child{color:var(--ink);font-weight:500}
+  .vocab .arrow{color:var(--accent)}
+
+  .say{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:10px}
+  .say-col{border-radius:8px;padding:11px 13px}
+  .say-do{background:var(--solid-bg);border:1px solid var(--solid-line)}
+  .say-dont{background:var(--redo-bg);border:1px solid var(--redo-line)}
+  .say-col h4{margin:0 0 6px;font-size:12px;font-family:var(--mono);letter-spacing:.05em;text-transform:uppercase}
+  .say-do h4{color:var(--solid)} .say-dont h4{color:var(--redo)}
+  .say-col li::before{display:none}
+  .say-col li{padding-left:14px;font-size:13px;margin:5px 0}
+  .say-do li{color:#155c3a} .say-dont li{color:#8a2727}
+  .say-do li::before{content:"✓";position:absolute;left:0;color:var(--solid)}
+  .say-dont li{position:relative} .say-dont li::before{content:"✕";position:absolute;left:0;color:var(--redo);display:block}
+
+  .beat{display:grid;grid-template-columns:26px 1fr;gap:11px;margin:11px 0;align-items:start}
+  .beat .bn{font-family:var(--mono);font-size:12px;font-weight:600;color:#fff;background:var(--accent);width:24px;height:24px;border-radius:6px;display:grid;place-items:center}
+  .beat .bt b{display:block;color:var(--ink);font-family:var(--display);font-size:13.5px;margin-bottom:2px}
+  .beat .bt span{font-size:13.5px;color:var(--ink-soft)}
+
+  .callout{background:linear-gradient(180deg,#fff, var(--accent-tint-2));border:1px solid var(--line);border-left:3px solid var(--accent);border-radius:var(--r);padding:15px 17px;margin-bottom:16px;box-shadow:var(--shadow)}
+  .callout .eyebrow{margin-bottom:6px}
+  .callout p{font-size:14px;color:var(--ink-soft);margin:6px 0}
+  .callout strong{color:var(--ink)}
+
+  .note{font-size:12.5px;color:var(--ink-faint);font-family:var(--mono);line-height:1.5}
+  .stub{background:var(--shaky-bg);border:1px solid var(--shaky-line);border-radius:8px;padding:10px 12px;font-size:13px;color:#7a4d05;margin-top:8px}
+  .stub b{color:#5e3c04}
+
+  footer{max-width:880px;margin:30px auto 0;padding:18px;border-top:1px solid var(--line);color:var(--ink-faint);font-size:12px;font-family:var(--mono);line-height:1.6}
+
+  @media (max-width:620px){
+    body{font-size:15px}
+    .wrap,.topbar-inner,.tabs-scroll{padding-left:14px;padding-right:14px}
+    .fact-grid,.say{grid-template-columns:1fr}
+    .dline{grid-template-columns:64px 1fr;gap:8px}
+    .stage-head h2{font-size:21px}
+    .readout .rd:nth-child(n+2){display:none}
+    .score{flex-wrap:wrap;gap:6px}
+    .score-q{flex-basis:100%;margin-bottom:2px}
+  }
+  @media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important;scroll-behavior:auto!important}}
+
+  /* ---------- PRINT ---------- */
+  @media print{
+    .topbar,.tabs,.stage-actions,.reveal-btn,.score,.btn{display:none!important}
+    .panel{display:block!important;padding:0;page-break-before:always}
+    .panel:first-of-type{page-break-before:avoid}
+    .direction{display:block!important;border-top:1px solid #ccc}
+    .block-body{display:block!important}
+    .card,.block{box-shadow:none;border:1px solid #ccc;break-inside:avoid}
+    body{background:#fff;padding:0}
+    a{color:#000}
+  }
+</style>
+</head>
+<body>
+<header class="topbar">
+  <div class="topbar-inner">
+    <div class="brand">
+      <span class="eyebrow">{{ROLE_TAGLINE}} · Self-Drill</span>
+      <b>Interview Readiness Console</b>
+    </div>
+    <div class="readout" id="readout" aria-live="polite">
+      <span class="rd"><span class="dot s"></span><b id="c-solid">0</b></span>
+      <span class="rd"><span class="dot k"></span><b id="c-shaky">0</b></span>
+      <span class="rd"><span class="dot r"></span><b id="c-redo">0</b></span>
+      <span class="rd">of <b id="c-total">0</b></span>
+    </div>
+    <button class="btn" onclick="window.print()">Print / Save PDF</button>
+    <button class="btn" id="resetBtn">Reset</button>
+  </div>
+</header>
+
+<nav class="tabs" aria-label="Interview stages">
+  <div class="tabs-scroll" role="tablist">
+    <button class="tab" role="tab" aria-selected="true" data-tab="brief">Brief &amp; Opener</button>
+    <button class="tab" role="tab" aria-selected="false" data-tab="ref">Reference</button>
+    <!-- R4 BUILD RULE: one tab per REQUESTED round only. Canonical labels/order: Recruiter · Hiring Mgr · Panel · Exec -->
+    <button class="tab" role="tab" aria-selected="false" data-tab="s1"><span class="num">1</span>{{ROUND_1}} <span class="cnt" data-cnt="s1"></span></button>
+  </div>
+</nav>
+
+<main class="wrap">
+
+<!-- ============ BRIEF & OPENER ============ -->
+<section class="panel active" id="tab-brief" role="tabpanel">
+  <div class="callout">
+    <div class="eyebrow">Read this first - facts current as of {{BUILD_DATE}}</div>
+    <p>{{COMPANY_STATE_CALLOUT - corrected facts, never-say lines, candidate positioning edge}}</p>
+  </div>
+  <div class="stage-head">
+    <div class="eyebrow">How to drill</div>
+    <h2>Run yourself through the gauntlet</h2>
+    <p>Open a stage, read the prompt, set a timer, and answer <strong>out loud</strong> before you reveal anything. Then open the direction, score how it landed, and move on. Numbered tabs are the real interview sequence; counts of "solid" answers roll up at the top. Progress is for this session only - hit <span class="note">Print / Save PDF</span> to keep a copy.</p>
+  </div>
+  <div class="block">
+    <button class="block-h" aria-expanded="true"><span>The scoring rubric - judge every answer on four axes</span><span class="ticker">90s-2min</span><span class="chev">&#9656;</span></button>
+    <div class="block-body open">
+      <h4>Structure <span class="note">(STAR discipline)</span></h4>
+      <p><strong>Strong:</strong> crisp Situation&#8594;Task&#8594;Action&#8594;Result, natural transitions, &#8804;2 min, no follow-up needed to grasp the outcome. <strong>Weak:</strong> rambling, missing components, no clear result, &gt;3 min.</p>
+      <h4>Specificity <span class="note">(numbers, names, outcomes)</span></h4>
+      <p><strong>Strong:</strong> 3+ concrete data points - scale, outcome, timeline all quantified. <strong>Weak:</strong> "a large team," "significant improvement."</p>
+      <h4>Vocabulary <span class="note">(target-role language)</span></h4>
+      <p><strong>Strong:</strong> zero Sobha-internal terms - every concept in {{TARGET}} language. <strong>Weak:</strong> 2+ untranslated internal terms (see the Vocabulary map in Reference).</p>
+      <h4>Assertiveness <span class="note">(your Low-D development area)</span></h4>
+      <p><strong>Strong:</strong> leads with "I decided / I held / I built / I escalated," zero hedges, short declaratives at the key moment. <strong>Weak:</strong> "I think," "we sort of," passive voice, analysis before action.</p>
+    </div>
+  </div>
+  <div class="block">
+    <button class="block-h" aria-expanded="true"><span>The 90-second opener - structure, not script</span><span class="ticker">~90s</span><span class="chev">&#9656;</span></button>
+    <div class="block-body open">
+      <p class="note">{{OPENER_HOOK_NOTE - chosen hook + differentiator for this role}}</p>
+      <div class="beat"><div class="bn">1</div><div class="bt"><b>Now + scale proof</b><span>"{{BEAT_1}}"</span></div></div>
+      <div class="beat"><div class="bn">2</div><div class="bt"><b>The hook - state it plainly</b><span>"{{BEAT_2}}"</span></div></div>
+      <div class="beat"><div class="bn">3</div><div class="bt"><b>Why {{COMPANY}} / why now</b><span>"{{BEAT_3}}"</span></div></div>
+      <div class="beat"><div class="bn">4</div><div class="bt"><b>What I bring + signature line</b><span>"{{BEAT_4}}" Land it: <em>"{{SIGNATURE_LINE}}"</em></span></div></div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ REFERENCE ============ -->
+<section class="panel" id="tab-ref" role="tabpanel">
+  <div class="stage-head">
+    <div class="eyebrow">Always-on reference</div>
+    <h2>Cheat sheets you pull from</h2>
+    <p>The facts, the language, and the stories every answer draws on. Skim before each drill so the vocabulary and numbers are loaded.</p>
+  </div>
+  <div class="block">
+    <button class="block-h" aria-expanded="false"><span>Company-state - know these cold</span><span class="ticker">homework</span><span class="chev">&#9656;</span></button>
+    <div class="block-body">
+      <div class="fact-grid">
+        <div class="fact"><b>{{FACT_LABEL}}</b><span>{{FACT_BODY}}</span></div>
+        <!-- repeat .fact - 6-8 cells typical -->
+      </div>
+      <div class="say">
+        <div class="say-col say-do"><h4>Say</h4><ul><li>{{SAY_LINE}}</li></ul></div>
+        <div class="say-col say-dont"><h4>Don't say</h4><ul><li>{{DONT_SAY_LINE}}</li></ul></div>
+      </div>
+    </div>
+  </div>
+  <!-- Additional .block units, same pattern: featured STAR rack (one block per S-code story - tag
+       assertiveness proof-points: PR-rejection / NPV-defence / risk-register), control-system
+       vocabulary map (Sobha to target), "why leaving" script. Source: playbook + STAR_STORY_BANK_V3. -->
+</section>
+
+<!-- ============ STAGE PANEL (one per REQUESTED round; duplicate + renumber) ============ -->
+<section class="panel" id="tab-s1" role="tabpanel" data-stage="s1">
+  <div class="stage-head">
+    <div class="eyebrow">Stage 1 of {{N_ROUNDS}}</div>
+    <h2>{{ROUND_1_TITLE}}</h2>
+    <p>{{ROUND_1_BRIEF - what this round tests, what sinks candidates here}}</p>
+    <div class="stage-actions">
+      <button class="btn revealAll">Reveal all directions</button>
+      <button class="btn hideAll">Hide all</button>
+    </div>
+  </div>
+  <!-- cards injected by JS -->
+</section>
+
+<footer>
+  Built from STAR Bank V3 + {{PLAYBOOK_REF}}. {{CORRECTION_NOTES}}. Progress is session-only - Print/Save PDF to keep it. Open flags for P1: {{FLAGS_FOR_MANIFEST}}. · v1 · self-drill edition
+</footer>
+</main>
+
+<script>
+/* ---------------- QUESTION DATA ----------------
+   R4: keys = requested rounds only (s1..sN). 4-9 questions per stage typical.
+   tag -> chip colour: screen | comp | beh | scn | sys.
+   Every entry: p = prompt (verbatim question), use = which asset/S-code answers it,
+   frame = answer architecture in beats, key = verbatim key line, trap = failure mode. */
+const Q = {
+  s1:[
+    {tag:"screen",t:"Screen",p:"\\u201C{{QUESTION}}\\u201D",
+     use:"{{ASSET_OR_SCODE}}",
+     frame:"{{BEATS}}",
+     key:"\\u201C{{KEY_LINE}}\\u201D",
+     trap:"{{TRAP}}"}
+  ]
+};
+const state = {}; // qid -> 'solid'|'shaky'|'redo'
+function tagClass(t){return {beh:'t-beh',scn:'t-scn',sys:'t-sys',comp:'t-comp',screen:'t-screen'}[t]||'t-beh';}
+
+Object.keys(Q).forEach(stage=>{
+  const host=document.querySelector('#tab-'+stage);
+  Q[stage].forEach((q,i)=>{
+    const qid=stage+'-'+i;
+    const card=document.createElement('div');
+    card.className='card'; card.id='card-'+qid; card.dataset.stage=stage;
+    card.innerHTML=\`
+      <div class="card-top">
+        <div class="qmeta"><span class="qno">\${stage.toUpperCase()} · Q\${i+1}</span><span class="tag \${tagClass(q.tag)}">\${q.t}</span></div>
+        <div class="prompt"><span class="q">\${q.p}</span></div>
+        <button class="reveal-btn" aria-expanded="false"><span class="chev">▸</span> Reveal direction</button>
+      </div>
+      <div class="direction">
+        <div class="dline"><div class="dlabel">Use</div><div class="dval">\${q.use}</div></div>
+        <div class="dline"><div class="dlabel">Frame</div><div class="dval">\${q.frame}</div></div>
+        <div class="dline"><div class="dlabel">Key line</div><div class="dval"><span class="keyline">\${q.key}</span></div></div>
+        <div class="dline"><div class="dlabel">Trap</div><div class="dval"><span class="trap">\${q.trap}</span></div></div>
+      </div>
+      <div class="score">
+        <span class="score-q">How did that land?</span>
+        <button class="sbtn" data-s="solid" data-q="\${qid}">Solid</button>
+        <button class="sbtn" data-s="shaky" data-q="\${qid}">Shaky</button>
+        <button class="sbtn" data-s="redo" data-q="\${qid}">Redo</button>
+      </div>\`;
+    host.appendChild(card);
+  });
+});
+
+/* ---------------- INTERACTIONS ---------------- */
+document.addEventListener('click',e=>{
+  // reveal a single direction
+  const rb=e.target.closest('.reveal-btn');
+  if(rb){const d=rb.closest('.card').querySelector('.direction');const open=d.classList.toggle('open');rb.setAttribute('aria-expanded',open);rb.innerHTML=(open?'<span class="chev" style="transform:rotate(90deg)">▸</span> Hide direction':'<span class="chev">▸</span> Reveal direction');return;}
+  // collapsible reference blocks
+  const bh=e.target.closest('.block-h');
+  if(bh){const b=bh.nextElementSibling;const open=b.classList.toggle('open');bh.setAttribute('aria-expanded',open);return;}
+  // reveal/hide all in a stage
+  const ra=e.target.closest('.revealAll');
+  if(ra){ra.closest('.panel').querySelectorAll('.direction').forEach(d=>d.classList.add('open'));ra.closest('.panel').querySelectorAll('.reveal-btn').forEach(r=>{r.setAttribute('aria-expanded',true);r.innerHTML='<span class="chev" style="transform:rotate(90deg)">▸</span> Hide direction';});return;}
+  const ha=e.target.closest('.hideAll');
+  if(ha){ha.closest('.panel').querySelectorAll('.direction').forEach(d=>d.classList.remove('open'));ha.closest('.panel').querySelectorAll('.reveal-btn').forEach(r=>{r.setAttribute('aria-expanded',false);r.innerHTML='<span class="chev">▸</span> Reveal direction';});return;}
+  // self-score
+  const sb=e.target.closest('.sbtn');
+  if(sb){
+    const qid=sb.dataset.q, s=sb.dataset.s, card=document.getElementById('card-'+qid);
+    const row=sb.parentElement;
+    if(state[qid]===s){delete state[qid];sb.classList.remove('on');card.className='card';card.dataset.stage=qid.split('-')[0];}
+    else{state[qid]=s;row.querySelectorAll('.sbtn').forEach(b=>b.classList.remove('on'));sb.classList.add('on');card.className='card is-'+s;card.dataset.stage=qid.split('-')[0];}
+    updateCounts();return;
+  }
+});
+
+/* tab switching */
+const tabs=document.querySelectorAll('.tab');
+tabs.forEach(t=>t.addEventListener('click',()=>{
+  tabs.forEach(x=>x.setAttribute('aria-selected',false));
+  t.setAttribute('aria-selected',true);
+  document.querySelectorAll('.panel').forEach(p=>p.classList.remove('active'));
+  document.getElementById('tab-'+t.dataset.tab).classList.add('active');
+  window.scrollTo({top:0,behavior:'smooth'});
+}));
+
+/* counts roll-up */
+const total=Object.values(Q).reduce((n,a)=>n+a.length,0);
+document.getElementById('c-total').textContent=total;
+function updateCounts(){
+  let s=0,k=0,r=0;
+  Object.values(state).forEach(v=>{if(v==='solid')s++;else if(v==='shaky')k++;else r++;});
+  document.getElementById('c-solid').textContent=s;
+  document.getElementById('c-shaky').textContent=k;
+  document.getElementById('c-redo').textContent=r;
+  document.querySelectorAll('.cnt').forEach(c=>{
+    const st=c.dataset.cnt;let sc=0,tot=Q[st].length;
+    Object.keys(state).forEach(q=>{if(q.startsWith(st+'-')&&state[q]==='solid')sc++;});
+    c.textContent=sc+'/'+tot;
+  });
+}
+document.getElementById('resetBtn').addEventListener('click',()=>{
+  for(const k in state)delete state[k];
+  document.querySelectorAll('.sbtn').forEach(b=>b.classList.remove('on'));
+  document.querySelectorAll('.card').forEach(c=>{const st=c.dataset.stage;c.className='card';c.dataset.stage=st;});
+  updateCounts();
+});
+updateCounts();
+</script>
+</body>
+</html>
+`;
+
+// --- Shared small helpers ---------------------------------------------------
+
+function htmlEscape(s) {
+  return String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+// Escape + turn blank lines into paragraphs and single newlines into <br>.
+function htmlProse(s) {
+  const t = String(s ?? "").trim();
+  if (!t) return "";
+  return t.split(/\n{2,}/).map(p => `<p>${htmlEscape(p).replace(/\n/g, "<br />")}</p>`).join("");
+}
+function profileSummaryText(profile) {
+  const c = condensedProfile(profile);
+  return [
+    c.achievementStatement,
+    c.transitionSummary && `Transition: ${c.transitionSummary}`,
+    c.coreReframe && `Reframe: ${c.coreReframe}`,
+    c.aiDifferentiator && `AI edge: ${c.aiDifferentiator}`,
+  ].filter(Boolean).join(" · ").slice(0, 900) || "Senior operator transitioning domains.";
+}
+function gapListForRole(role) {
+  return (role?.gaps || "").split(";").map(s => s.trim()).filter(Boolean);
+}
+// Posture derivation from linked cos-skills tracks (build-time default, user-overridable).
+function derivePosture(role, skills) {
+  const linked = (skills?.tracks || []).filter(t => (t.linkedRoleIds || []).includes(role.id));
+  if (linked.some(t => t.status === "COMPLETE")) return "closed-via-TRK";
+  if (linked.some(t => t.status === "ACTIVE" || t.status === "IN_PROGRESS")) return "partial";
+  return "open";
+}
+function trackEvidenceText(role, skills) {
+  const done = (skills?.tracks || []).filter(t => (t.linkedRoleIds || []).includes(role.id) && t.status === "COMPLETE");
+  if (!done.length) return "no completed track work on file";
+  return done.map(t => `${t.trackId} ${t.name} (COMPLETE)`).join("; ");
+}
+// Suggested tier from role sub-scores (editable in the modal).
+function suggestTier(role) {
+  const lv = role?.subScores?.leadershipVocab;
+  const fn = role?.subScores?.functional;
+  if (typeof lv === "number" && lv >= 6 && (typeof fn !== "number" || fn >= 6)) return "VOCAB_ONLY";
+  if (typeof fn === "number" && fn <= 4) return "GENUINE";
+  return "PARTIAL";
+}
+
+// --- AP-07a: front + back matter -------------------------------------------
+
+function buildAP07aSystem(data, role, gaps) {
+  return `You are building the front and back matter of an interview gap-closure study pack.
+This pack makes a candidate speak credibly about scorecard gaps — it is a read-and-drill
+document, NOT a skill curriculum. Module test: everything must terminate in something
+the candidate can SAY in an interview.
+
+ROLE: ${role.role} at ${role.company}
+ROLE CONTEXT: ${role.whatItIs || "(role context not captured)"} | Top requirements: ${role.top3Requirements || "(n/a)"} | Reframe: ${role.reframeStrategy || "(n/a)"}
+
+GAPS WITH POSTURE AND TIER (user-confirmed):
+${JSON.stringify(gaps)}
+
+DIMENSION EVIDENCE (for severity/priority):
+${JSON.stringify(role.dimensionScores || [])}
+
+CANDIDATE SUMMARY: ${profileSummaryText(data.profile)}
+VOCABULARY TABLE (current-employer term → target term):
+${vocabTableText(data.vocab)}
+STORIES MAPPED TO THIS ROLE: ${storiesForRole(role, data.stars).map(s => `${s.storyId}: ${s.title}`).join("; ") || "(none on file)"}
+
+PRIORITY LOGIC: P0 = "if this fails the interview can fail" · P1 = "credible candidates
+speak this fluently" · P2 = "fast to close, still audible".
+POSTURE MEANING: open = honest acknowledgment + bridge ("what I am not claiming");
+closed-via-TRK = demonstrate with evidence (track work as proof); partial = between.
+
+OUTPUT — respond with ONLY this JSON:
+{
+  "roleTargetSentence": "", "oneParagraphStance": "", "isIsNotBullets": [""],
+  "studyRule": "", "moduleReadingGuide": "", "readinessDefinition": "",
+  "classification": [{ "gap": "", "tier": "", "priority": "P0|P1|P2", "posture": "", "oneLineThesis": "" }],
+  "sequencingRule": "", "mvc": "", "checklist": [""],
+  "translationLab": {
+    "rules": ["don't change facts","change vocabulary","keep metrics","map current-employer ops to target ops","don't claim work you didn't do","emphasize operating discipline"],
+    "storyMap": [{ "storyId": "", "from": "", "to": "" }],
+    "exemplar": { "storyId": "", "rewritten": "" }
+  },
+  "recallSheet": [""],
+  "mockQs": [{ "question": "", "answerShape": "" }]
+}`;
+}
+
+// --- AP-07b: one call per gap ----------------------------------------------
+
+function buildAP07bSystem(data, role, gap, trackEvidence) {
+  return `You are writing ONE gap module for an interview gap-closure study pack.
+Everything must terminate in something the candidate can SAY. Do not write a study
+plan or curriculum — that lives elsewhere.
+
+ROLE: ${role.role} at ${role.company} | ROLE CONTEXT: ${role.whatItIs || "(role context not captured)"}
+GAP: ${gap.gap}  | TIER: ${gap.tier} | POSTURE: ${gap.posture}
+POSTURE RULES: open → honest acknowledgment + bridge, state plainly what is NOT being
+claimed; closed-via-TRK → demonstrate with evidence from completed track work
+(${trackEvidence}); partial → acknowledge remaining edge, evidence what's done.
+
+CANDIDATE SUMMARY: ${profileSummaryText(data.profile)}
+VOCABULARY TABLE: ${vocabTableText(data.vocab)}
+RELEVANT STORIES: ${storiesForRole(role, data.stars).map(s => `${s.storyId}: ${s.title} — ${s.result || s.situation || ""}`).join("; ") || "(none on file)"}
+
+DENSITY (hard minimums): decoder ≥5 terms · ≥2 likely questions · full 2-minute answer
+(~280-320 words) · 60-second compressed answer · ≥4 safe phrases · ≥3 avoid phrases ·
+≥5 recall questions · one-line close.
+SOURCE INTEGRITY: every external/company claim you use gets a calibration entry —
+basis is VERIFIED (from provided data), SOFTENED (reasonable inference, hedged in the
+text itself), or UNCONFIRMED (flag, never assert). Soften in-body, not only in the tag.
+
+OUTPUT — respond with ONLY this JSON:
+{
+  "gap": "", "whatChanged": "", "factsToKnow": [""],
+  "decoder": [{ "term": "", "meaning": "", "currentEq": "", "spokenForm": "" }],
+  "operatingModel": "",
+  "likelyQuestions": [{ "question": "", "type": "" }],
+  "fullAnswer": "", "compressedAnswer": "",
+  "safePhrases": [""], "avoidPhrases": [""],
+  "recallQuestions": [""], "oneLineClose": "",
+  "claims": [{ "claim": "", "basis": "VERIFIED|SOFTENED|UNCONFIRMED" }]
+}`;
+}
+
+// --- Template assembly helpers (marker-driven, fill-never-restructure) -------
+
+function tmplBlock(t, name) {
+  const m = t.match(new RegExp(`<!--R:${name}-->([\\s\\S]*?)<!--/R:${name}-->`));
+  return m ? m[1] : "";
+}
+function tmplReplaceBlock(t, name, html) {
+  return t.replace(new RegExp(`<!--R:${name}-->[\\s\\S]*?<!--/R:${name}-->`), () => html);
+}
+// Clone the marked exemplar once per item; drop the region when empty.
+function tmplRepeat(t, name, items, render) {
+  const ex = tmplBlock(t, name);
+  const html = (items || []).map((it, i) => render(ex, it, i)).join("");
+  return tmplReplaceBlock(t, name, html);
+}
+// Fill {{TOKEN ...}} slots keyed by the leading identifier; unknown keys left intact.
+function tmplFill(t, map) {
+  return t.replace(/\{\{([^{}]+)\}\}/g, (full, inner) => {
+    const key = inner.trim().split(/[\s|:—-]/)[0];
+    return Object.prototype.hasOwnProperty.call(map, key) ? String(map[key] ?? "") : full;
+  });
+}
+// Number one page per <section>…</section>, replacing {{n}} sequentially.
+function tmplNumberPages(html, startPage) {
+  let page = startPage;
+  const out = html.replace(/<section[\s\S]*?<\/section>/g, sec => {
+    const s = sec.replace(/\{\{n\}\}/g, String(page));
+    page++;
+    return s;
+  });
+  return { html: out, nextPage: page };
+}
+
+function assembleGapPack({ template, front, modules, role, meta }) {
+  const target = role.company || (role.role || "target").split(" ").slice(-1)[0] || "target";
+  const buildDate = meta.buildDate || todayStr();
+  const gapCount = modules.length;
+  const compressed = m => gapCount > 6 && String(m.data?.priority || m.priority || m.classPriority || "").toUpperCase() === "P2";
+
+  // Match each module to its front-matter classification entry (by gap text, else index).
+  const classList = front.classification || [];
+  modules.forEach((m, i) => {
+    const c = classList.find(x => (x.gap || "").trim().toLowerCase() === (m.gap || "").trim().toLowerCase()) || classList[i] || {};
+    m.classPriority = c.priority || "P1";
+  });
+
+  // ---- Gap modules (full or compressed vocab card) ----
+  const moduleEx = tmplBlock(template, "module");
+  let modulesHtml = "";
+  modules.forEach((m, idx) => {
+    const M = idx + 1;
+    const d = m.data || {};
+    const isC = gapCount > 6 && String(m.classPriority).toUpperCase() === "P2";
+    if (isC) {
+      const rows = (d.decoder || []).map(dc =>
+        `<tr><td>${htmlEscape(dc.term)}</td><td>${htmlEscape(dc.meaning)}</td><td>${htmlEscape(dc.currentEq)}</td><td>${htmlEscape(dc.spokenForm)}</td></tr>`
+      ).join("") || `<tr><td colspan="4">Vocabulary to speak fluently for this gap.</td></tr>`;
+      modulesHtml += `<section class="page-card" data-page="M-vc">
+<div class="page-label">Page {{n}}</div>
+<h2 id="page-{{n}}">Page {{n}} - Module ${M}: ${htmlEscape(m.gap)} — Vocabulary Card (compressed, P2)</h2>
+<table><thead><tr><th>Term</th><th>What it means</th><th>Sobha equivalent</th><th>Say it as</th></tr></thead><tbody>${rows}</tbody></table>
+<h3>Credible-articulation line</h3><p>${htmlEscape((d.safePhrases || [])[0] || "State the vocabulary plainly and move on.")}</p>
+<h3>One proof point</h3><p>${htmlEscape(d.oneLineClose || (d.factsToKnow || [])[0] || "")}</p>
+</section>`;
+    } else {
+      let mod = moduleEx;
+      mod = tmplRepeat(mod, "decoder", d.decoder || [], (ex, dc) =>
+        tmplFill(ex, { TERM: htmlEscape(dc.term), MEANING: htmlEscape(dc.meaning), SOBHA_EQ: htmlEscape(dc.currentEq), SPOKEN_FORM: htmlEscape(dc.spokenForm) }));
+      mod = tmplRepeat(mod, "safe", d.safePhrases || [], (ex, v) => tmplFill(ex, { SAFE: htmlEscape(v) }));
+      mod = tmplRepeat(mod, "avoid", d.avoidPhrases || [], (ex, v) => tmplFill(ex, { AVOID: htmlEscape(v) }));
+      mod = tmplRepeat(mod, "recall", d.recallQuestions || [], (ex, v) => tmplFill(ex, { RECALL_Q: htmlEscape(v) }));
+      const factsHtml = [d.whatChanged, ...(d.factsToKnow || [])].filter(Boolean).map(f => `<p>${htmlEscape(f)}</p>`).join("") || "<p>(no facts captured)</p>";
+      const q0 = (d.likelyQuestions || [])[0];
+      mod = tmplFill(mod, {
+        GAP: htmlEscape(m.gap),
+        M: String(M),
+        FACTS_TO_KNOW_COLD: factsHtml,
+        HOW_OPS_AFFECTS_THE_OUTCOME_THIS_ROLE_CARES_ABOUT: htmlProse(d.operatingModel) || "<p>(operating model not captured)</p>",
+        LIKELY_QUESTION: htmlEscape(q0 ? q0.question : "Tell me about this area."),
+        FULL_ANSWER: htmlProse(d.fullAnswer),
+        COMPRESSED_ANSWER: htmlProse(d.compressedAnswer),
+        CLOSE: htmlEscape(d.oneLineClose),
+      });
+      modulesHtml += mod;
+    }
+  });
+  const numbered = tmplNumberPages(modulesHtml, 5);
+  let doc = tmplReplaceBlock(template, "module", numbered.html);
+
+  // ---- Back-matter page numbering (front = 4 pages, back = 4 pages) ----
+  const backStart = numbered.nextPage;
+  const N = backStart + 3;
+
+  // ---- Front-matter repeats ----
+  doc = tmplRepeat(doc, "isnot", front.isIsNotBullets || [], (ex, v) => tmplFill(ex, { IS_IS_NOT_BULLETS: htmlEscape(v) }));
+  doc = tmplRepeat(doc, "classification", classList, (ex, c) => tmplFill(ex, {
+    GAP_M: htmlEscape(c.gap), TIER: htmlEscape(c.tier), PRIORITY: htmlEscape(c.priority),
+    POSTURE: htmlEscape(c.posture), ONE_LINE_THESIS: htmlEscape(c.oneLineThesis),
+  }));
+  doc = tmplRepeat(doc, "checklist", front.checklist || [], (ex, v) => tmplFill(ex, { CHECKLIST_ITEM: htmlEscape(v) }));
+  doc = tmplRepeat(doc, "storymap", (front.translationLab && front.translationLab.storyMap) || [], (ex, s) =>
+    ex.replace("{{S##}}", htmlEscape(s.storyId)).replace("{{FROM}}", htmlEscape(s.from)).replace("{{TO}}", htmlEscape(s.to)).replace("{{QUESTION_TYPE}}", htmlEscape(s.questionType || s.useFor || "behavioral")));
+  doc = tmplRepeat(doc, "mockq", front.mockQs || [], (ex, q) =>
+    ex.replace("{{MOCK_Q - answer shape}}", `${htmlEscape(q.question)} — <em>${htmlEscape(q.answerShape)}</em>`));
+
+  // ---- Source Calibration appendix (MANDATORY — never absent) ----
+  const claims = [];
+  modules.forEach(m => (m.data?.claims || []).forEach(c => claims.push({ ...c, gap: m.gap })));
+  const calRows = claims.length ? claims : [{ claim: "No external company claims were asserted in this pack.", basis: "VERIFIED", gap: "—" }];
+  const flagCount = claims.filter(c => /SOFTENED|UNCONFIRMED/i.test(c.basis || "")).length;
+  doc = tmplRepeat(doc, "calibration", calRows, (ex, c) =>
+    ex.replace("{{CLAIM}}", htmlEscape(c.claim))
+      .replace("{{n}}", htmlEscape(c.gap || "—"))
+      .replace("verified | softened | unconfirmed", htmlEscape(String(c.basis || "VERIFIED").toLowerCase()))
+      .replace("{{BASIS}}", htmlEscape(c.gap && c.gap !== "—" ? `gap module: ${c.gap}` : "no external claims used")));
+
+  // ---- Manifest content folded into the appendix intro (template has no separate footer) ----
+  const coverage = modules.map(m => `${m.gap} [${m.tier}/${m.posture}${(gapCount > 6 && String(m.classPriority).toUpperCase() === "P2") ? ", compressed" : ""}]`).join("; ");
+  const manifest = ` — Return manifest: built ${buildDate}; ${gapCount} gap${gapCount === 1 ? "" : "s"} covered (${htmlEscape(coverage)}); ${N} pp vs ≤32 ceiling; ${flagCount} source-calibration flag${flagCount === 1 ? "" : "s"} raised.`;
+  doc = doc.replace("A pack without this page is not shippable.", "A pack without this page is not shippable." + manifest);
+
+  // ---- Scalar / global slots ----
+  const globalMap = {
+    ROLE: htmlEscape(role.role || "Target Role"),
+    TARGET: htmlEscape(target),
+    BUILD_DATE: htmlEscape(buildDate),
+    ROLE_TARGET_SENTENCE: htmlEscape(front.roleTargetSentence),
+    PURPOSE: htmlEscape(`Closes ${gapCount} scorecard gap${gapCount === 1 ? "" : "s"} for ${role.role || "the role"} — a senior operator who studied the domain and translates evidence into ${target} language, not a domain-veteran costume.`),
+    ONE_PARAGRAPH_STANCE: htmlEscape(front.oneParagraphStance),
+    STUDY_RULE: htmlEscape(front.studyRule),
+    PASS_1_TO_4: htmlEscape(front.moduleReadingGuide || front.studyRule),
+    MODULE_READING_GUIDE: htmlEscape(front.moduleReadingGuide),
+    READINESS_DEFINITION: htmlEscape(front.readinessDefinition),
+    SEQUENCING_RULE: htmlEscape(front.sequencingRule),
+    MVC: htmlEscape(front.mvc),
+    COMPRESSION_NOTE: htmlEscape(meta.compressionNote || "sequence P0 gaps first; compress lower-priority modules if the interview is imminent"),
+    PROMPT_LIST: (front.recallSheet || []).map(htmlEscape).join(" · "),
+    ONE_FULLY_REWRITTEN_EXEMPLAR: htmlProse((front.translationLab && front.translationLab.exemplar && `${front.translationLab.exemplar.storyId ? front.translationLab.exemplar.storyId + ": " : ""}${front.translationLab.exemplar.rewritten}`) || ""),
+  };
+  doc = tmplFill(tmplFill(doc, globalMap), globalMap); // twice: resolve nested {{TARGET}} inside {{PURPOSE}}
+
+  // ---- Page-count tokens (do N-3/N-2/N-1 before N) ----
+  doc = doc.split("{{N-3}}").join(String(backStart))
+           .split("{{N-2}}").join(String(backStart + 1))
+           .split("{{N-1}}").join(String(backStart + 2))
+           .split("{{N}}").join(String(N));
+
+  // ---- Drop any exemplar/comment tokens we did not fill ----
+  doc = doc.replace(/\{\{[^{}]*\}\}/g, "");
+  return doc;
 }
 
 // ============================================================
@@ -1580,6 +2536,10 @@ function makeRole(input, settings) {
     resumeVersion: null,
     playbookStatus: "PENDING",
     coverNoteStatus: "PENDING",
+    gapPackStatus: "PENDING",
+    consoleStatus: "PENDING",
+    gapPackBuiltAt: null,
+    consoleBuiltAt: null,
     stageTracker: { currentStage: "IDENTIFIED", lastUpdated: now, history: [{ stage: "IDENTIFIED", date: now, note: "Added manually" }] },
     referrals: [],
     redTeamFindings: [],
@@ -2353,8 +3313,9 @@ function ArtifactDots({ role }) {
     return <span className={`w-1.5 h-1.5 rounded-full ${c}`} />;
   };
   return (
-    <div className="flex items-center gap-1" title="Resume · Playbook · Cover note">
+    <div className="flex items-center gap-1" title="Resume · Playbook · Cover note · Gap Pack · Console">
       {dot(role.resumeStatus)}{dot(role.playbookStatus)}{dot(role.coverNoteStatus)}
+      {dot(role.gapPackStatus || "PENDING")}{dot(role.consoleStatus || "PENDING")}
     </div>
   );
 }
@@ -2445,8 +3406,139 @@ function AddRoleSheet({ open, onClose, onAdd, settings }) {
   );
 }
 
-function RoleDrawer({ role, data, settings, onMove, onUpdate, onDelete, onClose }) {
+// Sequential Gap Pack build (AP-07a front/back + one AP-07b call per gap), then
+// client-side assembly, iframe preview, Copy HTML, and best-effort blob download.
+function GapPackBuildModal({ role, data, dispatch, onClose, onBuilt }) {
+  const initGaps = () => gapListForRole(role).map(g => ({ gap: g, tier: suggestTier(role), posture: derivePosture(role, data.skills) }));
+  const [gaps, setGaps] = useState(initGaps);
+  const [building, setBuilding] = useState(false);
+  const [progress, setProgress] = useState("");
+  const [html, setHtml] = useState(null);
+  const [error, setError] = useState(null);
+  const [copied, setCopied] = useState(false);
+
+  const setGap = (i, patch) => setGaps(gs => gs.map((g, idx) => idx === i ? { ...g, ...patch } : g));
+
+  const build = async () => {
+    setBuilding(true); setError(null); setHtml(null);
+    try {
+      setProgress("Front matter…");
+      const aRes = await callClaudeAPI({ systemPrompt: buildAP07aSystem(data, role, gaps), userMessage: `Build front/back matter for the gap pack: ${role.role} at ${role.company}`, maxTokens: 3000 });
+      const front = parseJsonResponse(aRes.text);
+      const modules = [];
+      for (let i = 0; i < gaps.length; i++) {
+        const g = gaps[i];
+        setProgress(`Gap ${i + 1}/${gaps.length}: ${g.gap.slice(0, 42)}…`);
+        const ev = trackEvidenceText(role, data.skills);
+        const bRes = await callClaudeAPI({ systemPrompt: buildAP07bSystem(data, role, g, ev), userMessage: `Write the gap module for: ${g.gap}`, maxTokens: 2500 });
+        modules.push({ ...g, data: parseJsonResponse(bRes.text) });
+      }
+      setProgress("Assembling…");
+      const out = assembleGapPack({ template: GAP_PACK_TEMPLATE_HTML, front, modules, role, meta: { buildDate: todayStr() } });
+      setHtml(out);
+      onBuilt();
+      dispatch({ type: "SHOW_TOAST", message: "Gap Pack built ✓", toastType: "success" });
+    } catch (err) {
+      setError("Gap Pack build failed: " + (err?.message || err) + ". Inside Claude.ai the API is available automatically.");
+    }
+    setBuilding(false); setProgress("");
+  };
+
+  const doCopy = async () => { const ok = await copyToClipboard(html); setCopied(true); setTimeout(() => setCopied(false), 2000); if (!ok) dispatch({ type: "SHOW_TOAST", message: "Copy failed — select & copy manually", toastType: "error" }); };
+  const doDownload = () => {
+    try {
+      const blob = new Blob([html], { type: "text/html" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url; a.download = `gap-pack-${role.id || "role"}.html`; a.click();
+      URL.revokeObjectURL(url);
+    } catch { dispatch({ type: "SHOW_TOAST", message: "Download blocked — use Copy HTML", toastType: "info" }); }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 bg-black/60 flex items-end justify-center" onClick={onClose}>
+      <div className="bg-gray-900 rounded-t-xl w-full max-w-lg max-h-[90vh] flex flex-col border-t border-white/10" onClick={e => e.stopPropagation()}>
+        <div className="flex items-center justify-between p-3 border-b border-white/5">
+          <div className="min-w-0">
+            <h3 className="text-sm font-medium text-white truncate">Build Gap Pack</h3>
+            <p className="text-[11px] text-gray-500 truncate">{role.role} · {role.company} · {gaps.length} gap{gaps.length === 1 ? "" : "s"}</p>
+          </div>
+          <button onClick={onClose} className="p-1 text-gray-500 hover:text-gray-300"><X size={16} /></button>
+        </div>
+
+        <div className="p-3 flex-1 overflow-auto space-y-3">
+          {!html && (
+            <>
+              <p className="text-[11px] text-gray-500">Confirm posture (from linked tracks) and tier per gap. {gaps.length > 6 ? "More than 6 gaps — P2-tier gaps compress to 1-page vocab cards." : ""}</p>
+              <div className="space-y-2">
+                {gaps.map((g, i) => (
+                  <div key={i} className="p-2.5 rounded-lg bg-white/5 border border-white/5 space-y-2">
+                    <div className="text-xs text-gray-200">{g.gap}</div>
+                    <div className="grid grid-cols-2 gap-2">
+                      <label className="block">
+                        <span className="text-[10px] text-gray-500 uppercase tracking-wider">Posture</span>
+                        <select value={g.posture} onChange={e => setGap(i, { posture: e.target.value })} className="mt-1 w-full bg-black/30 rounded px-2 py-1.5 text-[11px] text-white border border-white/5 focus:border-amber-500/30 focus:outline-none">
+                          <option value="open">open</option>
+                          <option value="closed-via-TRK">closed-via-TRK</option>
+                          <option value="partial">partial</option>
+                        </select>
+                      </label>
+                      <label className="block">
+                        <span className="text-[10px] text-gray-500 uppercase tracking-wider">Tier</span>
+                        <select value={g.tier} onChange={e => setGap(i, { tier: e.target.value })} className="mt-1 w-full bg-black/30 rounded px-2 py-1.5 text-[11px] text-white border border-white/5 focus:border-amber-500/30 focus:outline-none">
+                          <option value="GENUINE">GENUINE</option>
+                          <option value="VOCAB_ONLY">VOCAB_ONLY</option>
+                          <option value="PARTIAL">PARTIAL</option>
+                        </select>
+                      </label>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </>
+          )}
+
+          {building && (
+            <div className="flex items-center gap-2 p-2.5 rounded-lg bg-amber-500/10 border border-amber-500/20 text-[11px] text-amber-300">
+              <Loader2 size={14} className="animate-spin" /> {progress || "Working…"}
+            </div>
+          )}
+          {error && (
+            <div className="flex items-start gap-2 p-2.5 rounded-lg bg-red-500/10 border border-red-500/20 text-[11px] text-red-300">
+              <AlertCircle size={14} className="shrink-0 mt-0.5" /> <span>{error}</span>
+            </div>
+          )}
+
+          {html && (
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <span className="text-[11px] text-gray-500 uppercase tracking-wider">Preview</span>
+                <div className="flex gap-2">
+                  <button onClick={doCopy} className="text-[10px] text-amber-400 hover:text-amber-300 flex items-center gap-1">{copied ? <Check size={11} /> : <Copy size={11} />}{copied ? "Copied" : "Copy HTML"}</button>
+                  <button onClick={doDownload} className="text-[10px] text-teal-400 hover:text-teal-300 flex items-center gap-1"><Download size={11} />Download</button>
+                </div>
+              </div>
+              <iframe srcDoc={html} title="Gap Pack" className="w-full h-[520px] rounded-lg border border-white/10 bg-white" sandbox="allow-scripts" />
+            </div>
+          )}
+        </div>
+
+        <div className="p-3 border-t border-white/5 flex gap-2">
+          <button onClick={onClose} className="flex-1 py-2 text-xs text-gray-400 bg-white/5 rounded-lg hover:bg-white/10">{html ? "Close" : "Cancel"}</button>
+          {!html && (
+            <button onClick={build} disabled={building || gaps.length === 0} className="flex-1 py-2 text-xs font-medium rounded-lg bg-amber-500/15 text-amber-400 hover:bg-amber-500/25 disabled:opacity-40 flex items-center justify-center gap-1.5">
+              {building ? <Loader2 size={14} className="animate-spin" /> : <FileText size={14} />}{building ? "Building…" : "Build"}
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function RoleDrawer({ role, data, settings, dispatch, onMove, onUpdate, onDelete, onClose }) {
   const [confirmDel, setConfirmDel] = useState(false);
+  const [gapPackOpen, setGapPackOpen] = useState(false);
   if (!role) return null;
   const ctc = ctcRange(role, settings);
   const { stale, weeks } = getStaleness(role, settings);
@@ -2515,6 +3607,22 @@ function RoleDrawer({ role, data, settings, onMove, onUpdate, onDelete, onClose 
                 </button>
               ))}
             </div>
+          </div>
+
+          {/* Gap Pack generator (AP-07) */}
+          <div>
+            <div className="text-[11px] text-gray-500 uppercase tracking-wider mb-1.5">Gap Pack</div>
+            <button
+              onClick={() => setGapPackOpen(true)}
+              disabled={gapListForRole(role).length === 0}
+              className="w-full flex items-center justify-center gap-1.5 py-2 text-xs font-medium rounded-lg bg-amber-500/15 text-amber-400 hover:bg-amber-500/25 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+            >
+              <FileText size={14} /> Build Gap Pack
+              {(role.gapPackStatus === "BUILT") && <Badge variant="green">BUILT</Badge>}
+            </button>
+            {gapListForRole(role).length === 0
+              ? <p className="text-[10px] text-gray-600 mt-1">Add gaps to this role to enable the gap pack.</p>
+              : role.gapPackBuiltAt && <p className="text-[10px] text-gray-600 mt-1">Last built {String(role.gapPackBuiltAt).slice(0, 10)}</p>}
           </div>
 
           {/* Linked stories */}
@@ -2589,6 +3697,16 @@ function RoleDrawer({ role, data, settings, onMove, onUpdate, onDelete, onClose 
           )}
         </div>
       </div>
+
+      {gapPackOpen && (
+        <GapPackBuildModal
+          role={role}
+          data={data}
+          dispatch={dispatch}
+          onClose={() => setGapPackOpen(false)}
+          onBuilt={() => onUpdate(role.id, { gapPackStatus: "BUILT", gapPackBuiltAt: new Date().toISOString() })}
+        />
+      )}
     </div>
   );
 }
@@ -2699,6 +3817,7 @@ function ZonePipeline({ data, dispatch }) {
         role={openRole}
         data={data}
         settings={settings}
+        dispatch={dispatch}
         onMove={moveRole}
         onUpdate={updateRole}
         onDelete={deleteRole}
