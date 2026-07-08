@@ -2335,6 +2335,184 @@ function assembleGapPack({ template, front, modules, role, meta }) {
   return doc;
 }
 
+// --- AP-08: interview console content --------------------------------------
+
+const CONSOLE_ROUND_ORDER = ["RECRUITER", "HM", "PANEL", "EXEC"];
+const CONSOLE_ROUND_META = {
+  RECRUITER: { label: "Recruiter", title: "Recruiter Screen", tag: "screen", brief: "The screen: motivation, logistics, and headline fit. Candidates sink here by rambling or failing to state why-this-role-now crisply." },
+  HM: { label: "Hiring Mgr", title: "Hiring Manager", tag: "beh", brief: "Behavioral + scenario depth. The hiring manager probes for real ownership; vague STAR structure and missing metrics sink candidates here." },
+  PANEL: { label: "Panel", title: "Cross-Functional Panel", tag: "comp", brief: "Cross-functional stakeholder angles. Panelists test whether you can speak to partners' concerns; one-note answers sink here." },
+  EXEC: { label: "Exec", title: "Executive Round", tag: "sys", brief: "Strategic altitude: business judgment and brevity. Getting lost in operational detail instead of the business outcome sinks candidates here." },
+};
+
+function buildAP08System(data, role, roundsList) {
+  return `You are generating the role-specific content for an interview rehearsal console.
+The console renders STAR stories (provided separately by the app) and drills delivery.
+You generate ONLY: role brief content, cheat sheets, and round-by-round practice beats.
+
+ROLE: ${role.role} at ${role.company} | ROLE CONTEXT: ${role.whatItIs || "(role context not captured)"} | Top requirements: ${role.top3Requirements || "(n/a)"}
+REFRAME STRATEGY: ${role.reframeStrategy || "(n/a)"}
+CANDIDATE SUMMARY: ${profileSummaryText(data.profile)}
+VOCABULARY TABLE (wrong term → correct term): ${vocabTableText(data.vocab)}
+FEATURED STORIES (titles + results only): ${storiesForRole(role, data.stars).map(s => `${s.storyId}: ${s.title} — ${s.result || ""}`).join("; ") || "(none on file)"}
+ROUNDS TO BUILD (build these ONLY, no others): ${roundsList.join(", ")}
+
+ROUND DEFINITIONS: RECRUITER = screen (motivation, logistics, headline fit);
+HM = behavioral + scenario depth; PANEL = cross-functional (stakeholder angles);
+EXEC = strategic altitude (business judgment, brevity).
+
+OUTPUT — respond with ONLY this JSON:
+{
+  "roleTagline": "", "signatureLine": "",
+  "keyFacts": [{ "label": "", "body": "" }],
+  "cheatSheet": {
+    "say": [""],
+    "dontSay": [{ "line": "", "trap": "" }],
+    "controlSystem": [{ "keyLine": "" }]
+  },
+  "rounds": [
+    { "round": "RECRUITER|HM|PANEL|EXEC",
+      "beats": [{ "question": "", "beats": "", "assetOrScode": "" }] }
+  ]
+}
+Include 4-6 beats per requested round. dontSay traps name the follow-up that exposes the slip.`;
+}
+
+// Case-insensitive scan of story text for vocabulary source terms → target reframes.
+function vocabScanNotes(story, vocab) {
+  const text = [story.situation, story.task, story.action, story.result].filter(Boolean).join(" ").toLowerCase();
+  const hits = [];
+  for (const r of (vocab?.mandatoryReframes || [])) {
+    const src = (r.source || "").trim();
+    if (src && text.includes(src.toLowerCase())) hits.push(`${r.source} → ${r.target}`);
+  }
+  return hits;
+}
+const ASSERT_TAGS = ["pr-rejection", "npv", "risk register", "risk-register"];
+function isAssertivenessProof(story, notes) {
+  if ((story.category || "") === "ASSERTIVENESS") return true;
+  const blob = [story.title, story.situation, story.task, story.action, story.result, ...(notes || [])].join(" ").toLowerCase();
+  return ASSERT_TAGS.some(t => blob.includes(t));
+}
+
+function assembleConsole({ template, content, role, stories, vocab, rounds, meta }) {
+  const buildDate = meta.buildDate || todayStr();
+  const target = role.company || (role.role || "target").split(" ").slice(-1)[0] || "target";
+  const orderedRounds = CONSOLE_ROUND_ORDER.filter(r => rounds.includes(r));
+  const nRounds = orderedRounds.length;
+  let doc = template;
+
+  // ---- Nav tabs: one per requested round (canonical order) ----
+  const tabEx = template.match(/<button class="tab" role="tab" aria-selected="false" data-tab="s1">[\s\S]*?<\/button>/)[0];
+  const tabsHtml = orderedRounds.map((r, i) => {
+    const n = i + 1, m = CONSOLE_ROUND_META[r];
+    return tabEx
+      .replace('data-tab="s1"', `data-tab="s${n}"`)
+      .replace('<span class="num">1</span>', `<span class="num">${n}</span>`)
+      .replace("{{ROUND_1}}", htmlEscape(m.label))
+      .replace('data-cnt="s1"', `data-cnt="s${n}"`);
+  }).join("\n    ");
+  doc = doc.replace(tabEx, () => tabsHtml);
+
+  // ---- Stage panels: one per requested round ----
+  const panelEx = template.match(/<section class="panel" id="tab-s1"[\s\S]*?<\/section>/)[0];
+  const panelsHtml = orderedRounds.map((r, i) => {
+    const n = i + 1, m = CONSOLE_ROUND_META[r];
+    return panelEx
+      .replace('id="tab-s1"', `id="tab-s${n}"`)
+      .replace('data-stage="s1"', `data-stage="s${n}"`)
+      .replace("Stage 1 of {{N_ROUNDS}}", `Stage ${n} of ${nRounds}`)
+      .replace("{{ROUND_1_TITLE}}", htmlEscape(m.title))
+      .replace(/\{\{ROUND_1_BRIEF[^}]*\}\}/, htmlEscape(m.brief));
+  }).join("\n\n");
+  doc = doc.replace(panelEx, () => panelsHtml);
+
+  // ---- Reference: company-state facts ----
+  const factEx = '<div class="fact"><b>{{FACT_LABEL}}</b><span>{{FACT_BODY}}</span></div>';
+  const facts = (content.keyFacts || []).map(f => `<div class="fact"><b>${htmlEscape(f.label)}</b><span>${htmlEscape(f.body)}</span></div>`).join("\n        ")
+    || factEx.replace("{{FACT_LABEL}}", "Role").replace("{{FACT_BODY}}", htmlEscape(role.role || ""));
+  doc = doc.replace(factEx, () => facts);
+
+  // ---- Reference: say / don't-say ----
+  const say = (content.cheatSheet?.say || []).map(s => `<li>${htmlEscape(s)}</li>`).join("") || "<li>—</li>";
+  const dont = (content.cheatSheet?.dontSay || []).map(d => `<li>${htmlEscape(d.line)}${d.trap ? ` <span class="trap">${htmlEscape(d.trap)}</span>` : ""}</li>`).join("") || "<li>—</li>";
+  doc = doc.replace("<li>{{SAY_LINE}}</li>", () => say).replace("<li>{{DONT_SAY_LINE}}</li>", () => dont);
+
+  // ---- Reference: featured STAR rack + control-system vocab map (100% client-side fill) ----
+  let cleanCount = 0, correctedCount = 0;
+  const storyBlocks = (stories || []).map(s => {
+    const notes = vocabScanNotes(s, vocab);
+    if (notes.length) correctedCount++; else cleanCount++;
+    const assertive = isAssertivenessProof(s, notes);
+    const star = [["Situation", s.situation], ["Task", s.task], ["Action", s.action], ["Result", s.result]]
+      .filter(([, v]) => v).map(([k, v]) => `<p><strong>${k}.</strong> ${htmlEscape(v)}</p>`).join("");
+    const metrics = (s.metrics || []).length
+      ? `<p class="note">Category: ${htmlEscape((s.category || "").replace(/_/g, " "))} · Metrics: ${htmlEscape((s.metrics || []).join(", "))}</p>`
+      : `<p class="note">Category: ${htmlEscape((s.category || "").replace(/_/g, " "))}</p>`;
+    const correction = notes.length
+      ? `<div class="stub"><b>Vocabulary check:</b> ${notes.map(htmlEscape).join(" · ")}</div>`
+      : `<p class="note">Vocabulary: none — clean.</p>`;
+    return `<div class="block">
+    <button class="block-h" aria-expanded="false"><span>${htmlEscape(s.storyId)} · ${htmlEscape(s.title || "Story")}</span>${assertive ? '<span class="pill">assertiveness proof</span>' : ''}<span class="ticker">STAR</span><span class="chev">&#9656;</span></button>
+    <div class="block-body">${star}${metrics}${correction}</div>
+  </div>`;
+  }).join("\n  ");
+  const vocabRows = (vocab?.mandatoryReframes || []).map(r => `<tr><td>${htmlEscape(r.source)}</td><td class="arrow">&#8594;</td><td>${htmlEscape(r.target)}</td></tr>`).join("");
+  const controlSystem = (content.cheatSheet?.controlSystem || []).map(c => `<li>${htmlEscape(c.keyLine)}</li>`).join("");
+  const vocabBlock = (vocabRows || controlSystem) ? `<div class="block">
+    <button class="block-h" aria-expanded="false"><span>Control-system vocabulary map</span><span class="ticker">say-this</span><span class="chev">&#9656;</span></button>
+    <div class="block-body">${vocabRows ? `<table class="vocab"><tbody>${vocabRows}</tbody></table>` : ""}${controlSystem ? `<h4>Control lines</h4><ul>${controlSystem}</ul>` : ""}</div>
+  </div>` : "";
+  doc = doc.replace(
+    /(<!-- Additional \.block units[\s\S]*?-->\s*)(<\/section>)/,
+    (mAll, cmt, close) => `${cmt}\n  ${storyBlocks}\n  ${vocabBlock}\n${close}`
+  );
+
+  // ---- Round question data (replace the Q placeholder; interaction JS untouched) ----
+  const Q = {};
+  orderedRounds.forEach((r, i) => {
+    const m = CONSOLE_ROUND_META[r];
+    const round = (content.rounds || []).find(x => (x.round || "").toUpperCase() === r) || { beats: [] };
+    Q[`s${i + 1}`] = (round.beats || []).map(b => ({
+      tag: m.tag, t: m.label,
+      p: `“${b.question || ""}”`,
+      use: b.assetOrScode || "—",
+      frame: b.beats || "",
+      key: "",
+      trap: "",
+    }));
+  });
+  const qJson = JSON.stringify(Q).replace(/<\//g, "<\\/");
+  doc = doc.replace(/const Q = \{[\s\S]*?\n\};/, () => `const Q = ${qJson};`);
+
+  // ---- Opener + brief scalar fills (best-effort from AP-08 content) ----
+  const sayList = content.cheatSheet?.say || [];
+  const ctrlList = (content.cheatSheet?.controlSystem || []).map(c => c.keyLine);
+  const beatSrc = [...ctrlList, ...sayList];
+  const flags = `rounds: ${orderedRounds.map(r => CONSOLE_ROUND_META[r].label).join(", ")}; ${(stories || []).length} featured stories; ${correctedCount} with vocabulary corrections`;
+  const map = {
+    ROLE: htmlEscape(role.role || "Target Role"),
+    ROLE_TAGLINE: htmlEscape(content.roleTagline || role.role || "Interview drill"),
+    TARGET: htmlEscape(target),
+    COMPANY: htmlEscape(role.company || "the company"),
+    BUILD_DATE: htmlEscape(buildDate),
+    SIGNATURE_LINE: htmlEscape(content.signatureLine || ""),
+    OPENER_HOOK_NOTE: htmlEscape(role.reframeStrategy || content.roleTagline || "Lead with your strongest scale proof, then the hook."),
+    COMPANY_STATE_CALLOUT: htmlEscape((content.keyFacts || [])[0]?.body || content.roleTagline || "Know the company state cold before you drill."),
+    BEAT_1: htmlEscape(beatSrc[0] || "Where you are now + your strongest scale proof."),
+    BEAT_2: htmlEscape(beatSrc[1] || "The hook — state it plainly."),
+    BEAT_3: htmlEscape(beatSrc[2] || `Why ${role.company || "this company"} / why now.`),
+    BEAT_4: htmlEscape(beatSrc[3] || "What you bring."),
+    N_ROUNDS: String(nRounds),
+    PLAYBOOK_REF: htmlEscape(`score card ${role.id || ""}`.trim()),
+    CORRECTION_NOTES: htmlEscape(`${(stories || []).length} stories scanned — ${correctedCount} need vocabulary correction, ${cleanCount} clean`),
+    FLAGS_FOR_MANIFEST: htmlEscape(flags),
+  };
+  doc = tmplFill(doc, map);
+  doc = doc.replace(/\{\{[^{}]*\}\}/g, "");
+  return doc;
+}
+
 // ============================================================
 // SECTION 6: APP REDUCER
 // ============================================================
@@ -4072,6 +4250,7 @@ const PREP_TABS = [
   { id: "bq", label: "BQ Router", icon: ListChecks },
   { id: "mock", label: "Mock", icon: Mic },
   { id: "negotiate", label: "Negotiate", icon: DollarSign },
+  { id: "console", label: "Console", icon: Users },
 ];
 
 function PrepStories({ data, dispatch, saveStars }) {
@@ -4306,10 +4485,144 @@ function PrepNegotiate({ data, dispatch }) {
   );
 }
 
+const CONSOLE_ROUND_CHOICES = [
+  { code: "RECRUITER", label: "Recruiter" },
+  { code: "HM", label: "Hiring Mgr" },
+  { code: "PANEL", label: "Panel" },
+  { code: "EXEC", label: "Exec" },
+];
+
+// Prep Hub → Console: pick role, rounds (required, none pre-checked), featured
+// stories (default = role.starIds), then build the AP-08 interview console.
+function PrepConsole({ data, dispatch, savePipeline }) {
+  const roles = data.pipeline.roles || [];
+  const [roleId, setRoleId] = useState(roles[0]?.id || "");
+  const role = roles.find(r => r.id === roleId) || null;
+  const allStories = data.stars.stories || [];
+  const [rounds, setRounds] = useState([]); // none pre-checked (R4)
+  const [featured, setFeatured] = useState(role?.starIds || []);
+  const [building, setBuilding] = useState(false);
+  const [html, setHtml] = useState(null);
+  const [error, setError] = useState(null);
+  const [copied, setCopied] = useState(false);
+
+  // Reset featured-story default when the role changes.
+  useEffect(() => {
+    const r = roles.find(x => x.id === roleId) || null;
+    setFeatured(r?.starIds || []);
+    setHtml(null); setError(null);
+  }, [roleId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  if (roles.length === 0) {
+    return <EmptyState icon={Users} title="No Roles Yet" description="Add a role to the Pipeline (or score a JD) before building an interview console." action="Go to Pipeline" onAction={() => dispatch({ type: "SET_ZONE", zone: "pipeline" })} />;
+  }
+
+  const toggleRound = code => setRounds(rs => rs.includes(code) ? rs.filter(x => x !== code) : [...rs, code]);
+  const toggleStory = id => setFeatured(fs => fs.includes(id) ? fs.filter(x => x !== id) : [...fs, id]);
+
+  const build = async () => {
+    if (!role || rounds.length === 0) return;
+    setBuilding(true); setError(null); setHtml(null);
+    try {
+      const orderedRounds = CONSOLE_ROUND_ORDER.filter(r => rounds.includes(r));
+      const res = await callClaudeAPI({ systemPrompt: buildAP08System(data, role, orderedRounds), userMessage: `Build console content for: ${role.role} at ${role.company} — rounds: ${orderedRounds.join(", ")}`, maxTokens: 3000 });
+      const content = parseJsonResponse(res.text);
+      const stories = featured.map(id => allStories.find(s => s.storyId === id)).filter(Boolean);
+      const out = assembleConsole({ template: CONSOLE_SHELL_HTML, content, role, stories, vocab: data.vocab, rounds: orderedRounds, meta: { buildDate: todayStr() } });
+      setHtml(out);
+      await savePipeline(roles.map(r => r.id === role.id ? { ...r, consoleStatus: "BUILT", consoleBuiltAt: new Date().toISOString() } : r));
+      dispatch({ type: "SHOW_TOAST", message: "Console built ✓", toastType: "success" });
+    } catch (err) {
+      setError("Console build failed: " + (err?.message || err) + ". Inside Claude.ai the API is available automatically.");
+    }
+    setBuilding(false);
+  };
+
+  const doCopy = async () => { const ok = await copyToClipboard(html); setCopied(true); setTimeout(() => setCopied(false), 2000); if (!ok) dispatch({ type: "SHOW_TOAST", message: "Copy failed — select & copy manually", toastType: "error" }); };
+  const doDownload = () => {
+    try {
+      const blob = new Blob([html], { type: "text/html" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url; a.download = `console-${role.id || "role"}.html`; a.click();
+      URL.revokeObjectURL(url);
+    } catch { dispatch({ type: "SHOW_TOAST", message: "Download blocked — use Copy HTML", toastType: "info" }); }
+  };
+
+  return (
+    <div className="space-y-3">
+      <label className="block">
+        <span className="text-[11px] text-gray-500 uppercase tracking-wider">Role</span>
+        <select value={roleId} onChange={e => setRoleId(e.target.value)} className="mt-1 w-full bg-black/30 rounded-lg px-2.5 py-2 text-sm text-white border border-white/5 focus:border-amber-500/30 focus:outline-none">
+          {roles.map(r => <option key={r.id} value={r.id}>{r.role} · {r.company}</option>)}
+        </select>
+      </label>
+
+      <div>
+        <div className="text-[11px] text-gray-500 uppercase tracking-wider mb-1.5">Rounds to build <span className="text-gray-600">(required — pick at least one)</span></div>
+        <div className="flex flex-wrap gap-1.5">
+          {CONSOLE_ROUND_CHOICES.map(c => (
+            <button key={c.code} onClick={() => toggleRound(c.code)} className={`px-2.5 py-1.5 rounded-lg text-[11px] font-medium transition-colors flex items-center gap-1.5 ${rounds.includes(c.code) ? "bg-teal-500/20 text-teal-400" : "bg-white/5 text-gray-400 hover:text-gray-300"}`}>
+              <span className={`w-3.5 h-3.5 rounded border flex items-center justify-center ${rounds.includes(c.code) ? "bg-teal-500/30 border-teal-500/50" : "border-white/15"}`}>{rounds.includes(c.code) && <Check size={9} />}</span>
+              {c.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div>
+        <div className="text-[11px] text-gray-500 uppercase tracking-wider mb-1.5">Featured stories <span className="text-gray-600">(default = role's mapped stories)</span></div>
+        {allStories.length === 0 ? (
+          <p className="text-[11px] text-gray-600">No stories on file — build STAR stories in Onboarding first.</p>
+        ) : (
+          <div className="flex flex-wrap gap-1.5">
+            {allStories.map(s => (
+              <button key={s.storyId} onClick={() => toggleStory(s.storyId)} className={`px-2 py-1 rounded text-[11px] transition-colors ${featured.includes(s.storyId) ? "bg-amber-500/20 text-amber-400" : "bg-white/5 text-gray-500 hover:text-gray-300"}`}>
+                {s.storyId}: {(s.title || "").slice(0, 22) || "Story"}
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+
+      <button onClick={build} disabled={building || rounds.length === 0} className="w-full flex items-center justify-center gap-1.5 py-2.5 text-xs font-medium rounded-lg bg-amber-500/15 text-amber-400 hover:bg-amber-500/25 transition-colors disabled:opacity-30 disabled:cursor-not-allowed">
+        {building ? <Loader2 size={14} className="animate-spin" /> : <Users size={14} />}
+        {building ? "Building console…" : rounds.length === 0 ? "Pick a round to build" : `Build Console (${rounds.length} round${rounds.length === 1 ? "" : "s"})`}
+        {role?.consoleStatus === "BUILT" && !html && <Badge variant="green">BUILT</Badge>}
+      </button>
+
+      {error && (
+        <div className="flex items-start gap-2 p-2.5 rounded-lg bg-red-500/10 border border-red-500/20 text-[11px] text-red-300">
+          <AlertCircle size={14} className="shrink-0 mt-0.5" /> <span>{error}</span>
+        </div>
+      )}
+
+      {html && (
+        <div className="space-y-2">
+          <div className="flex items-center justify-between">
+            <span className="text-[11px] text-gray-500 uppercase tracking-wider">Preview</span>
+            <div className="flex gap-2">
+              <button onClick={doCopy} className="text-[10px] text-amber-400 hover:text-amber-300 flex items-center gap-1">{copied ? <Check size={11} /> : <Copy size={11} />}{copied ? "Copied" : "Copy HTML"}</button>
+              <button onClick={doDownload} className="text-[10px] text-teal-400 hover:text-teal-300 flex items-center gap-1"><Download size={11} />Download</button>
+            </div>
+          </div>
+          <iframe srcDoc={html} title="Interview Console" className="w-full h-[560px] rounded-lg border border-white/10 bg-white" sandbox="allow-scripts" />
+        </div>
+      )}
+    </div>
+  );
+}
+
 function ZonePrep({ data, dispatch }) {
   const [tab, setTab] = useState("stories");
   const storyCount = getStoryCount(data.stars);
   const mapped = (data.stars.bqRouter || []).filter(r => r.primary).length;
+
+  const savePipeline = async (nextRoles) => {
+    const next = { ...data.pipeline, roles: nextRoles };
+    await saveData("pipeline", next);
+    dispatch({ type: "DATA_UPDATED", key: "pipeline", value: { ...next, lastUpdated: new Date().toISOString() } });
+  };
 
   const saveStars = async (next) => {
     await saveData("stars", next);
@@ -4338,6 +4651,7 @@ function ZonePrep({ data, dispatch }) {
       {tab === "bq" && <PrepBQRouter data={data} dispatch={dispatch} saveStars={saveStars} />}
       {tab === "mock" && <PrepMock data={data} dispatch={dispatch} />}
       {tab === "negotiate" && <PrepNegotiate data={data} dispatch={dispatch} />}
+      {tab === "console" && <PrepConsole data={data} dispatch={dispatch} savePipeline={savePipeline} />}
     </div>
   );
 }
