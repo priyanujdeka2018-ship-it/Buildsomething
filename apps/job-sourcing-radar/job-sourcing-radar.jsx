@@ -3,6 +3,7 @@ import {
   Radar, Briefcase, ScrollText, Settings, Search, Star,
   AlertCircle, Loader2, Check, X, Globe, IndianRupee, DollarSign,
   Building2, ListChecks, SlidersHorizontal, Clock,
+  Archive, ArchiveRestore, ExternalLink, FlaskConical, Trash2,
 } from "lucide-react";
 
 // ============================================================
@@ -29,7 +30,7 @@ import {
 // SECTION 1: CONSTANTS & DEFAULT SETTINGS
 // ============================================================
 
-const APP_VERSION = "1.0.0-m1";
+const APP_VERSION = "1.0.0-m2";
 
 // The three storage keys (spec §5). One key per dataset — each is read once
 // on load and written whole on change. No per-record storage calls.
@@ -159,6 +160,131 @@ async function loadAllData() {
 }
 
 // ============================================================
+// SECTION 2B: ROLE IDENTITY & DEDUPE (spec §5)
+// ============================================================
+// A role's identity is hash(company + normalized title). When a scan re-finds
+// a role we already have, we ONLY update its last_seen timestamp — star/archive
+// status, scores, and everything else stay untouched.
+
+// Normalize text so "Senior Manager — O2C" and "senior manager o2c" match:
+// lowercase, strip punctuation, collapse whitespace.
+function normalizeText(s) {
+  return String(s || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+}
+
+// Small stable string hash (djb2), rendered base-36. Not cryptographic —
+// just a compact, deterministic id for dedupe.
+function hashString(s) {
+  let h = 5381;
+  for (let i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) | 0;
+  return Math.abs(h).toString(36);
+}
+
+function roleId(company, title) {
+  return "r" + hashString(normalizeText(company) + "::" + normalizeText(title));
+}
+
+// Merge incoming roles (from a scan, or the sample loader) into the existing
+// list. Returns the merged array plus counts for the scan log / toast.
+function mergeRoles(existing, incoming, now = new Date().toISOString()) {
+  const byId = new Map((existing || []).map(r => [r.id, r]));
+  let added = 0;
+  for (const raw of incoming || []) {
+    const id = roleId(raw.company, raw.title);
+    const prev = byId.get(id);
+    if (prev) {
+      // Already known: refresh last_seen ONLY (spec §5 dedupe rule).
+      byId.set(id, { ...prev, last_seen: now });
+    } else {
+      byId.set(id, { ...raw, id, status: "new", first_seen: now, last_seen: now });
+      added++;
+    }
+  }
+  return { roles: Array.from(byId.values()), found: (incoming || []).length, added };
+}
+
+/* ---------------------------------------------------------------
+   TEST HARNESS (unit-style, per spec milestone 2)
+   Paste into any JS console alongside the four functions above:
+
+   // 1. id is stable across punctuation/case variants
+   roleId("Northern Trust", "Senior Manager — Fund Servicing")
+     === roleId("northern trust", "senior manager fund servicing")   // → true
+
+   // 2. different roles get different ids
+   roleId("Northern Trust", "Senior Manager") !==
+   roleId("State Street", "Senior Manager")                          // → true
+
+   // 3. first merge adds everything
+   const inc = [{ company: "Acme", title: "Ops Manager", fit_score: 80 }];
+   const m1 = mergeRoles([], inc, "2026-01-01T00:00:00Z");
+   m1.added === 1 && m1.roles[0].status === "new"
+     && m1.roles[0].first_seen === "2026-01-01T00:00:00Z"            // → true
+
+   // 4. re-merge is a no-op except last_seen; status survives
+   m1.roles[0].status = "starred";
+   const m2 = mergeRoles(m1.roles, inc, "2026-02-02T00:00:00Z");
+   m2.added === 0 && m2.roles[0].status === "starred"
+     && m2.roles[0].first_seen === "2026-01-01T00:00:00Z"
+     && m2.roles[0].last_seen === "2026-02-02T00:00:00Z"             // → true
+   --------------------------------------------------------------- */
+
+// ============================================================
+// SECTION 2C: SAMPLE DATA (Milestone 2 — removed from the UI once
+// the real scan engine lands in M3; harmless to keep as fixtures)
+// ============================================================
+// Six realistic roles covering both tracks, all shift signals, several
+// sources, and a spread of fit scores so the ranked list is visible.
+// NOTE: every Track B sample has india_eligible: true — ineligible roles
+// are dropped before storage by the M4 hard gate, so none should ever
+// exist in the pipeline.
+
+const SAMPLE_ROLES = [
+  {
+    track: "A", company: "Fidelity Investments India", title: "Director, Process Excellence (Lean Six Sigma)",
+    url: "https://jobs.fidelity.com/sample-1", source: "linkedin.com", location: "Chennai",
+    remote_type: "hybrid", india_eligible: true, comp_signal: { amount: 55, currency: "INR" },
+    shift_signal: "mixed", wlb_notes: "Tier-1 target; established GCC, strong tenure signals",
+    fit_score: 91, rationale: "Director band at a Tier-1 company, comp well above floor, process-excellence core match",
+  },
+  {
+    track: "A", company: "State Street", title: "Program Manager, Business Transformation",
+    url: "https://careers.statestreet.com/sample-2", source: "myworkdayjobs.com", location: "Pune",
+    remote_type: "remote", india_eligible: true, comp_signal: { amount: 46, currency: "INR" },
+    shift_signal: "india_day", wlb_notes: "Remote within India; day-shift program work",
+    fit_score: 88, rationale: "Transformation PM at Tier-1, remote, above floor, india_day",
+  },
+  {
+    track: "A", company: "Northern Trust", title: "Senior Manager — Fund Servicing Operations",
+    url: "https://careers.northerntrust.com/sample-3", source: "naukri.com", location: "Bengaluru",
+    remote_type: "hybrid", india_eligible: true, comp_signal: { amount: 42, currency: "INR" },
+    shift_signal: "india_day", wlb_notes: "Stable fin-services GCC, WLB-first reputation",
+    fit_score: 84, rationale: "Ops leadership in fin-services GCC, comp above floor, day shift",
+  },
+  {
+    track: "B", company: "GitLab", title: "Manager, Revenue Operations",
+    url: "https://boards.example.com/sample-4", source: "weworkremotely.com", location: "Remote (Global)",
+    remote_type: "remote", india_eligible: true, comp_signal: { amount: 65000, currency: "USD" },
+    shift_signal: "mixed", wlb_notes: "All-remote handbook company; async-first",
+    fit_score: 82, rationale: "RevOps manager at an established all-remote enterprise, above USD floor",
+  },
+  {
+    track: "B", company: "Atlassian", title: "Program Manager, Customer Operations",
+    url: "https://jobs.example.com/sample-5", source: "himalayas.app", location: "Remote (India eligible)",
+    remote_type: "remote", india_eligible: true, comp_signal: { amount: 72000, currency: "USD" },
+    shift_signal: "us_night", wlb_notes: "India-eligible confirmed; expects US-hours overlap",
+    fit_score: 79, rationale: "Strong role family and comp; night-shift overlap is the visible tradeoff",
+  },
+  {
+    track: "A", company: "Wells Fargo India", title: "Operations Manager — Order to Cash",
+    url: "https://careers.wellsfargo.com/sample-6", source: "iimjobs.com", location: "Hyderabad",
+    remote_type: "hybrid", india_eligible: true, comp_signal: { amount: 34, currency: "INR" },
+    shift_signal: "us_night", wlb_notes: "Large GCC; O2C is a direct experience match",
+    fit_score: 68, rationale: "In GCC comp band but under headline floor; night shift deducted",
+  },
+];
+
+// ============================================================
 // SECTION 3: SMALL SHARED UI PIECES (Career OS patterns)
 // ============================================================
 
@@ -254,24 +380,176 @@ function ZoneScan({ data }) {
 }
 
 // ============================================================
-// SECTION 5: ZONE — PIPELINE
+// SECTION 5: ZONE — PIPELINE (Milestone 2: list + star/archive)
 // ============================================================
-// M1: empty state only. Role list, badges, star/archive land in M2.
 
-function ZonePipeline({ data }) {
+// Compact comp display: Track A stores lakhs-per-annum, Track B absolute USD.
+function compLabel(c) {
+  if (!c || !c.amount) return null;
+  if (c.currency === "INR") return `₹${c.amount}L`;
+  if (c.currency === "USD") return `$${Math.round(c.amount / 1000)}K`;
+  return `${c.amount} ${c.currency}`;
+}
+
+// Shift badge colors: india_day is the good case, us_night is the visible
+// tradeoff (spec §2 — the flag working, not noise).
+const SHIFT_BADGE = {
+  india_day: { label: "india day", variant: "green" },
+  mixed: { label: "mixed shift", variant: "blue" },
+  us_night: { label: "US night", variant: "amber" },
+};
+
+function shortDate(iso) {
+  return String(iso || "").slice(0, 10);
+}
+
+// One role row: title/company, badge strip, fit score, star/archive actions.
+function RoleCard({ role, onStar, onArchive }) {
+  const shift = SHIFT_BADGE[role.shift_signal] || null;
+  const comp = compLabel(role.comp_signal);
+  const starred = role.status === "starred";
+  const archived = role.status === "archived";
+  return (
+    <div className={`p-3 rounded-lg bg-white/5 border space-y-2 ${starred ? "border-amber-500/30" : "border-white/5"} ${archived ? "opacity-50" : ""}`}>
+      <div className="flex items-start gap-2">
+        <div className="flex-1 min-w-0">
+          <div className="text-xs font-medium text-gray-200 leading-snug">{role.title}</div>
+          <div className="text-[11px] text-gray-500 mt-0.5">{role.company} · {role.location}</div>
+        </div>
+        <div className="text-right shrink-0">
+          <div className="text-lg font-bold text-amber-400 leading-none">{role.fit_score}</div>
+          <div className="text-[9px] text-gray-600 uppercase tracking-wider mt-0.5">fit</div>
+        </div>
+      </div>
+
+      {/* Badge strip: track · source · shift · remote · comp · eligibility */}
+      <div className="flex items-center gap-1.5 flex-wrap">
+        <Badge variant={role.track === "B" ? "teal" : "amber"}>Track {role.track}</Badge>
+        <Badge>{role.source}</Badge>
+        {shift && <Badge variant={shift.variant}>{shift.label}</Badge>}
+        {role.remote_type && <Badge variant="blue">{role.remote_type}</Badge>}
+        {comp && <Badge variant="green">{comp}</Badge>}
+        {role.track === "B" && role.india_eligible && (
+          <span className="inline-flex items-center gap-1 text-[10px] text-emerald-400"><Globe size={10} />India-eligible</span>
+        )}
+      </div>
+
+      {role.rationale && <p className="text-[10px] text-gray-500 leading-relaxed">{role.rationale}</p>}
+
+      <div className="flex items-center gap-2">
+        <button
+          onClick={() => onStar(role.id)}
+          className={`flex items-center gap-1 px-2.5 py-1.5 text-[11px] rounded transition-colors ${starred ? "bg-amber-500/20 text-amber-400" : "bg-white/5 text-gray-400 hover:text-amber-400"}`}
+        >
+          <Star size={11} fill={starred ? "currentColor" : "none"} /> {starred ? "Starred" : "Star"}
+        </button>
+        <button
+          onClick={() => onArchive(role.id)}
+          className="flex items-center gap-1 px-2.5 py-1.5 text-[11px] rounded bg-white/5 text-gray-400 hover:text-gray-200 transition-colors"
+        >
+          {archived ? <><ArchiveRestore size={11} /> Restore</> : <><Archive size={11} /> Archive</>}
+        </button>
+        {role.url && (
+          <a href={role.url} target="_blank" rel="noreferrer" className="ml-auto inline-flex items-center gap-1 text-[11px] text-teal-400 hover:text-teal-300">
+            View <ExternalLink size={11} />
+          </a>
+        )}
+      </div>
+
+      <div className="text-[9px] text-gray-600">first seen {shortDate(role.first_seen)} · last seen {shortDate(role.last_seen)}</div>
+    </div>
+  );
+}
+
+function ZonePipeline({ data, onSaveRoles }) {
   const roles = data.roles || [];
+  const [filter, setFilter] = useState("active"); // active | starred | archived | all
+  const [confirmClear, setConfirmClear] = useState(false);
+
+  // Status changes rewrite the whole array to storage (spec §5 batching).
+  const setStatus = (id, status) =>
+    onSaveRoles(roles.map(r => r.id === id ? { ...r, status } : r));
+  const toggleStar = id => {
+    const r = roles.find(x => x.id === id);
+    if (r) setStatus(id, r.status === "starred" ? "new" : "starred");
+  };
+  const toggleArchive = id => {
+    const r = roles.find(x => x.id === id);
+    if (r) setStatus(id, r.status === "archived" ? "new" : "archived");
+  };
+
+  // Sample loader (M2 only — replaced by the real scan in M3). Runs through
+  // mergeRoles, so pressing it twice demonstrates dedupe: second press adds 0
+  // new roles and only bumps last_seen.
+  const loadSamples = () => {
+    const { roles: merged, found, added } = mergeRoles(roles, SAMPLE_ROLES);
+    onSaveRoles(merged, `Samples merged: ${found} found · ${added} new${added === 0 ? " (dedupe working)" : ""}`);
+  };
+  const clearAll = () => { onSaveRoles([], "Pipeline cleared"); setConfirmClear(false); };
+
+  const counts = {
+    active: roles.filter(r => r.status !== "archived").length,
+    starred: roles.filter(r => r.status === "starred").length,
+    archived: roles.filter(r => r.status === "archived").length,
+    all: roles.length,
+  };
+  const shown = roles
+    .filter(r =>
+      filter === "all" ? true :
+      filter === "starred" ? r.status === "starred" :
+      filter === "archived" ? r.status === "archived" :
+      r.status !== "archived")
+    .sort((a, b) => (b.fit_score || 0) - (a.fit_score || 0)); // ranked by fit
+
   return (
     <div className="p-4 space-y-4">
-      <div>
-        <h2 className="text-base font-semibold text-white">Pipeline</h2>
-        <p className="text-xs text-gray-500 mt-0.5">{roles.length} roles stored</p>
+      <div className="flex items-center justify-between">
+        <div>
+          <h2 className="text-base font-semibold text-white">Pipeline</h2>
+          <p className="text-xs text-gray-500 mt-0.5">{counts.all} roles · {counts.starred} starred · ranked by fit</p>
+        </div>
+        <button onClick={loadSamples} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white/5 text-gray-400 text-[11px] hover:text-gray-200 transition-colors" title="Milestone 2 stub — replaced by the real scan in M3">
+          <FlaskConical size={12} /> Load samples
+        </button>
       </div>
-      {roles.length === 0 && (
+
+      {roles.length === 0 ? (
         <EmptyState
           icon={Briefcase}
           title="No Roles Yet"
-          description="Run a scan from the Scan tab to fill the pipeline. Found roles are deduplicated, scored, and ranked here."
+          description="Run a scan from the Scan tab (Milestone 3) — or tap Load samples above to try the list, star/archive, and dedupe with realistic stub data."
         />
+      ) : (
+        <>
+          {/* Status filter chips */}
+          <div className="flex gap-1.5">
+            {[["active", "Active"], ["starred", "Starred"], ["archived", "Archived"], ["all", "All"]].map(([id, label]) => (
+              <button key={id} onClick={() => setFilter(id)} className={`px-2.5 py-1 rounded-lg text-[11px] transition-colors ${filter === id ? "bg-amber-500/15 text-amber-400" : "bg-white/5 text-gray-500 hover:text-gray-300"}`}>
+                {label} <span className="opacity-60">{counts[id]}</span>
+              </button>
+            ))}
+          </div>
+
+          <div className="space-y-2">
+            {shown.length === 0 ? (
+              <div className="text-[11px] text-gray-600 text-center py-6">Nothing under this filter.</div>
+            ) : (
+              shown.map(r => <RoleCard key={r.id} role={r} onStar={toggleStar} onArchive={toggleArchive} />)
+            )}
+          </div>
+
+          {/* Destructive clear needs a second tap */}
+          {!confirmClear ? (
+            <button onClick={() => setConfirmClear(true)} className="flex items-center gap-1.5 text-[11px] text-gray-600 hover:text-red-400 transition-colors">
+              <Trash2 size={11} /> Clear all roles
+            </button>
+          ) : (
+            <div className="flex gap-2">
+              <button onClick={() => setConfirmClear(false)} className="flex-1 py-1.5 text-xs bg-white/5 rounded text-gray-400">Cancel</button>
+              <button onClick={clearAll} className="flex-1 py-1.5 text-xs bg-red-500/20 rounded text-red-300">Delete {counts.all} roles</button>
+            </div>
+          )}
+        </>
       )}
     </div>
   );
@@ -430,6 +708,19 @@ export default function JobSourcingRadar() {
     })();
   }, []);
 
+  // Write the whole roles array to storage, then reflect it in state.
+  // All role mutations (star, archive, merge, clear) flow through here.
+  const saveRoles = useCallback(async (nextRoles, toastMsg) => {
+    const ok = await storageSet(STORAGE_KEYS.roles, nextRoles);
+    if (ok) {
+      setData(d => ({ ...d, roles: nextRoles }));
+      if (toastMsg) setToast({ message: toastMsg, type: "success" });
+    } else {
+      setToast({ message: "Could not save roles — storage unavailable", type: "error" });
+    }
+    return ok;
+  }, []);
+
   const resetDefaults = useCallback(async () => {
     const fresh = { ...DEFAULT_SETTINGS, lastUpdated: new Date().toISOString() };
     const ok = await storageSet(STORAGE_KEYS.settings, fresh);
@@ -455,7 +746,7 @@ export default function JobSourcingRadar() {
   const renderZone = () => {
     switch (zone) {
       case "scan": return <ZoneScan data={data} />;
-      case "pipeline": return <ZonePipeline data={data} />;
+      case "pipeline": return <ZonePipeline data={data} onSaveRoles={saveRoles} />;
       case "log": return <ZoneLog data={data} />;
       case "settings": return <ZoneSettings data={data} onResetDefaults={resetDefaults} />;
       default: return null;

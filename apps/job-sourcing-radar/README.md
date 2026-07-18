@@ -13,8 +13,8 @@ ranks them, and stores a persistent pipeline in `window.storage`.
 | Milestone | State |
 |---|---|
 | 1. App shell: zones, default settings, storage layer, empty/error states | ✅ built |
-| 2. Roles list + star/archive + dedupe (stub data) | ⏳ next |
-| 3. Scan engine (2 API calls, web search, capped) | — |
+| 2. Roles list + star/archive + dedupe (stub data) | ✅ built |
+| 3. Scan engine (2 API calls, web search, capped) | ⏳ next |
 | 4. Scoring + india_eligible gate + scan log | — |
 | 5. Settings editor | — |
 | 6. Full acceptance run (spec §10) | — |
