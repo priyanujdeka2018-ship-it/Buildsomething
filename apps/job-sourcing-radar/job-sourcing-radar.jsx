@@ -3,7 +3,7 @@ import {
   Radar, Briefcase, ScrollText, Settings, Search, Star,
   AlertCircle, Loader2, Check, X, Globe, IndianRupee, DollarSign,
   Building2, ListChecks, SlidersHorizontal, Clock,
-  Archive, ArchiveRestore, ExternalLink, FlaskConical, Trash2,
+  Archive, ArchiveRestore, ExternalLink, FlaskConical, Trash2, Save, Plus, RotateCcw,
 } from "lucide-react";
 
 // ============================================================
@@ -25,7 +25,8 @@ import {
 //        floors, startup/tech/sub-manager deductions), visible score
 //        breakdown per card, persistent scan log with per-track search
 //        counts and India-gate drop visibility
-// Coming next: M5 settings editor.
+//   M5 — full in-app settings editor (engine, floors, tiers, keywords,
+//        sources, weights) with draft/Save flow persisting to radar:settings
 //
 // HARD CONSTRAINTS BUILT AGAINST (spec §4):
 //   - runs as a single-file React artifact inside Claude.ai
@@ -38,7 +39,7 @@ import {
 // SECTION 1: CONSTANTS & DEFAULT SETTINGS
 // ============================================================
 
-const APP_VERSION = "1.0.0-m4";
+const APP_VERSION = "1.0.0-m5";
 
 // The three storage keys (spec §5). One key per dataset — each is read once
 // on load and written whole on change. No per-record storage calls.
@@ -608,6 +609,66 @@ function applyScoring(roles, settings) {
    --------------------------------------------------------------- */
 
 // ============================================================
+// SECTION 2F: SETTINGS SANITIZER (Milestone 5)
+// ============================================================
+// The editor lets you type freely (comma lists, blank lines, half-finished
+// numbers); this turns the draft into a valid settings object on Save.
+// Invalid numbers fall back to the current default rather than breaking scans.
+
+function splitCsv(s) { return String(s || "").split(",").map(x => x.trim()).filter(Boolean); }
+function splitLines(s) { return String(s || "").split("\n").map(x => x.trim()).filter(Boolean); }
+function toNum(v, fallback) {
+  if (v === "" || v == null) return fallback; // blank field = "not set", not zero
+  const n = Number(v);
+  return Number.isFinite(n) && n >= 0 ? n : fallback;
+}
+
+// draft = the edited settings object; text = the free-text fields
+// (tier lists as comma-separated, keyword clusters one-per-line).
+function sanitizeSettings(draft, text) {
+  const D = DEFAULT_SETTINGS;
+  return {
+    ...draft,
+    model: String(draft.model || "").trim() || D.model,
+    searchCaps: {
+      trackA: Math.max(1, toNum(draft.searchCaps?.trackA, D.searchCaps.trackA)),
+      trackB: Math.max(1, toNum(draft.searchCaps?.trackB, D.searchCaps.trackB)),
+    },
+    restrictToSourceDomains: !!draft.restrictToSourceDomains,
+    compFloors: {
+      trackA_LPA: toNum(draft.compFloors?.trackA_LPA, D.compFloors.trackA_LPA),
+      trackA_gccBandMin: toNum(draft.compFloors?.trackA_gccBandMin, D.compFloors.trackA_gccBandMin),
+      trackA_gccBandMax: toNum(draft.compFloors?.trackA_gccBandMax, D.compFloors.trackA_gccBandMax),
+      trackB_USD: toNum(draft.compFloors?.trackB_USD, D.compFloors.trackB_USD),
+    },
+    companyTiers: {
+      tier1: splitCsv(text.tier1),
+      tier2: splitCsv(text.tier2),
+      tier3: splitCsv(text.tier3),
+    },
+    keywordClusters: splitLines(text.clusters).length ? splitLines(text.clusters) : D.keywordClusters,
+    sources: (draft.sources || [])
+      .map(s => ({
+        domain: String(s.domain || "").trim().toLowerCase().replace(/^https?:\/\//, "").replace(/^www\./, "").split("/")[0],
+        label: String(s.label || "").trim() || String(s.domain || "").trim(),
+        track: ["A", "B", "AB"].includes(s.track) ? s.track : "A",
+        priority: toNum(s.priority, 2) === 1 ? 1 : 2,
+        enabled: !!s.enabled,
+      }))
+      .filter(s => s.domain), // a source without a domain can't be queried
+    scoringWeights: {
+      roleFamily: toNum(draft.scoringWeights?.roleFamily, D.scoringWeights.roleFamily),
+      remoteFlex: toNum(draft.scoringWeights?.remoteFlex, D.scoringWeights.remoteFlex),
+      seniority: toNum(draft.scoringWeights?.seniority, D.scoringWeights.seniority),
+      comp: toNum(draft.scoringWeights?.comp, D.scoringWeights.comp),
+      shift: toNum(draft.scoringWeights?.shift, D.scoringWeights.shift),
+      wlb: toNum(draft.scoringWeights?.wlb, D.scoringWeights.wlb),
+    },
+    lastUpdated: new Date().toISOString(),
+  };
+}
+
+// ============================================================
 // SECTION 3: SMALL SHARED UI PIECES (Career OS patterns)
 // ============================================================
 
@@ -975,98 +1036,254 @@ function ZoneLog({ data }) {
 }
 
 // ============================================================
-// SECTION 7: ZONE — SETTINGS (read-only in M1; editor is M5)
+// SECTION 7: ZONE — SETTINGS (Milestone 5: full in-app editor)
 // ============================================================
-// Shows the live settings object so the user can verify defaults are
-// stored and loaded correctly. Editing arrives in Milestone 5.
+// Everything a scan uses is editable here and persists to radar:settings.
+// Edits apply on the NEXT scan (acceptance criterion 6) — no code changes.
+// Pattern: edit a local draft, then an explicit Save button commits it
+// (clearest for a non-developer: nothing changes until you press Save).
 
-function SettingsRow({ label, value }) {
+// Small labelled number input. Empty is allowed while typing; the sanitizer
+// falls back to the default on Save if it's left invalid.
+function NumField({ label, value, onChange }) {
   return (
-    <div className="flex items-center justify-between py-1.5 text-xs border-b border-white/5 last:border-0">
-      <span className="text-gray-500">{label}</span>
-      <span className="text-gray-300 font-medium text-right">{value}</span>
-    </div>
+    <label className="block">
+      <span className="text-[10px] text-gray-500 uppercase tracking-wider">{label}</span>
+      <input
+        type="number"
+        value={value ?? ""}
+        onChange={e => onChange(e.target.value === "" ? "" : Number(e.target.value))}
+        className="mt-1 w-full bg-black/30 rounded-lg px-2.5 py-2 text-sm text-white border border-white/5 focus:border-amber-500/30 focus:outline-none"
+      />
+    </label>
   );
 }
 
-function ZoneSettings({ data, onResetDefaults }) {
+function TextField({ label, value, onChange, placeholder }) {
+  return (
+    <label className="block">
+      <span className="text-[10px] text-gray-500 uppercase tracking-wider">{label}</span>
+      <input
+        value={value ?? ""}
+        onChange={e => onChange(e.target.value)}
+        placeholder={placeholder}
+        className="mt-1 w-full bg-black/30 rounded-lg px-2.5 py-2 text-sm text-white border border-white/5 focus:border-amber-500/30 focus:outline-none"
+      />
+    </label>
+  );
+}
+
+function LinesArea({ label, hint, value, onChange, rows = 4 }) {
+  return (
+    <label className="block">
+      <span className="text-[10px] text-gray-500 uppercase tracking-wider">{label}</span>
+      {hint && <span className="block text-[10px] text-gray-600 mt-0.5">{hint}</span>}
+      <textarea
+        value={value ?? ""}
+        onChange={e => onChange(e.target.value)}
+        rows={rows}
+        className="mt-1 w-full bg-black/30 rounded-lg px-2.5 py-2 text-xs text-gray-200 border border-white/5 focus:border-amber-500/30 focus:outline-none resize-none leading-relaxed"
+      />
+    </label>
+  );
+}
+
+function ToggleRow({ label, hint, on, onToggle }) {
+  return (
+    <button onClick={onToggle} className="w-full flex items-center gap-2 py-2 text-left">
+      <span className={`w-8 h-4.5 rounded-full p-0.5 transition-colors ${on ? "bg-amber-500/60" : "bg-white/10"}`} style={{ height: 18 }}>
+        <span className={`block w-3.5 h-3.5 rounded-full bg-white transition-transform ${on ? "translate-x-3.5" : ""}`} />
+      </span>
+      <span className="flex-1">
+        <span className="block text-xs text-gray-300">{label}</span>
+        {hint && <span className="block text-[10px] text-gray-600">{hint}</span>}
+      </span>
+      <Badge variant={on ? "amber" : "default"}>{on ? "ON" : "OFF"}</Badge>
+    </button>
+  );
+}
+
+function ZoneSettings({ data, onSaveSettings, onResetDefaults }) {
   const s = data.settings;
-  const w = s.scoringWeights;
+  // Draft object for structured fields + free-text state for list fields.
+  const [draft, setDraft] = useState(s);
+  const [text, setText] = useState({
+    tier1: s.companyTiers.tier1.join(", "),
+    tier2: s.companyTiers.tier2.join(", "),
+    tier3: s.companyTiers.tier3.join(", "),
+    clusters: s.keywordClusters.join("\n"),
+  });
+
+  // Resync the draft whenever saved settings change (after Save or Reset).
+  useEffect(() => {
+    setDraft(s);
+    setText({
+      tier1: s.companyTiers.tier1.join(", "),
+      tier2: s.companyTiers.tier2.join(", "),
+      tier3: s.companyTiers.tier3.join(", "),
+      clusters: s.keywordClusters.join("\n"),
+    });
+  }, [s]);
+
+  const set = patch => setDraft(d => ({ ...d, ...patch }));
+  const setCaps = patch => set({ searchCaps: { ...draft.searchCaps, ...patch } });
+  const setFloors = patch => set({ compFloors: { ...draft.compFloors, ...patch } });
+  const setWeights = patch => set({ scoringWeights: { ...draft.scoringWeights, ...patch } });
+  const setSource = (i, patch) => set({ sources: draft.sources.map((x, idx) => idx === i ? { ...x, ...patch } : x) });
+  const removeSource = i => set({ sources: draft.sources.filter((_, idx) => idx !== i) });
+  const addSource = () => set({ sources: [...draft.sources, { domain: "", label: "", track: "A", priority: 2, enabled: true }] });
+
+  // Dirty check: has anything changed vs. what's saved?
+  const savedText = {
+    tier1: s.companyTiers.tier1.join(", "), tier2: s.companyTiers.tier2.join(", "),
+    tier3: s.companyTiers.tier3.join(", "), clusters: s.keywordClusters.join("\n"),
+  };
+  const dirty = JSON.stringify(draft) !== JSON.stringify(s) || JSON.stringify(text) !== JSON.stringify(savedText);
+
+  const save = () => onSaveSettings(sanitizeSettings(draft, text), "Settings saved — the next scan uses them");
+  const discard = () => { setDraft(s); setText(savedText); };
+
+  const w = draft.scoringWeights;
+  const weightTotal = ["roleFamily", "remoteFlex", "seniority", "comp", "shift", "wlb"].reduce((sum, k) => sum + (Number(w[k]) || 0), 0);
+  const capTotal = (Number(draft.searchCaps.trackA) || 0) + (Number(draft.searchCaps.trackB) || 0);
+
   return (
     <div className="p-4 space-y-5">
-      <div>
-        <h2 className="text-base font-semibold text-white">Settings</h2>
-        <p className="text-xs text-gray-500 mt-0.5">Read-only view — the in-app editor arrives in Milestone 5</p>
+      <div className="flex items-center justify-between">
+        <div>
+          <h2 className="text-base font-semibold text-white">Settings</h2>
+          <p className="text-xs text-gray-500 mt-0.5">Edits apply on the next scan · nothing changes until you Save</p>
+        </div>
+        {dirty && <Badge variant="amber">unsaved</Badge>}
       </div>
 
-      <div>
-        <div className="text-[11px] text-gray-500 uppercase tracking-wider mb-1 flex items-center gap-1"><SlidersHorizontal size={11} />Engine</div>
-        <SettingsRow label="Model" value={s.model} />
-        <SettingsRow label="Search cap (A / B)" value={`${s.searchCaps.trackA} / ${s.searchCaps.trackB}`} />
-        <SettingsRow label="Restrict search to source domains" value={s.restrictToSourceDomains ? "ON" : "OFF (default)"} />
+      {/* Engine */}
+      <div className="space-y-2">
+        <div className="text-[11px] text-gray-500 uppercase tracking-wider flex items-center gap-1"><SlidersHorizontal size={11} />Engine</div>
+        <TextField label="Model" value={draft.model} onChange={v => set({ model: v })} placeholder="claude-sonnet-4-6" />
+        <div className="grid grid-cols-2 gap-2">
+          <NumField label="Track A search cap" value={draft.searchCaps.trackA} onChange={v => setCaps({ trackA: v })} />
+          <NumField label="Track B search cap" value={draft.searchCaps.trackB} onChange={v => setCaps({ trackB: v })} />
+        </div>
+        {capTotal > 12 && (
+          <p className="text-[10px] text-amber-400/90 leading-relaxed">Total cap {capTotal} exceeds the spec's 12/scan guardrail — raise only on evidence of thin scans (spec §7).</p>
+        )}
+        <ToggleRow
+          label="Restrict searches to source domains"
+          hint="Default OFF — restricting risks missing career sites hosted on SuccessFactors / Eightfold"
+          on={!!draft.restrictToSourceDomains}
+          onToggle={() => set({ restrictToSourceDomains: !draft.restrictToSourceDomains })}
+        />
       </div>
 
-      <div>
-        <div className="text-[11px] text-gray-500 uppercase tracking-wider mb-1 flex items-center gap-1"><IndianRupee size={11} />Comp floors</div>
-        <SettingsRow label="Track A floor" value={`₹${s.compFloors.trackA_LPA} LPA`} />
-        <SettingsRow label="Track A GCC band" value={`₹${s.compFloors.trackA_gccBandMin}–${s.compFloors.trackA_gccBandMax}L`} />
-        <SettingsRow label="Track B floor" value={`$${s.compFloors.trackB_USD.toLocaleString()} USD`} />
+      {/* Comp floors */}
+      <div className="space-y-2">
+        <div className="text-[11px] text-gray-500 uppercase tracking-wider flex items-center gap-1"><IndianRupee size={11} />Comp floors</div>
+        <div className="grid grid-cols-3 gap-2">
+          <NumField label="A floor (LPA)" value={draft.compFloors.trackA_LPA} onChange={v => setFloors({ trackA_LPA: v })} />
+          <NumField label="GCC band min" value={draft.compFloors.trackA_gccBandMin} onChange={v => setFloors({ trackA_gccBandMin: v })} />
+          <NumField label="GCC band max" value={draft.compFloors.trackA_gccBandMax} onChange={v => setFloors({ trackA_gccBandMax: v })} />
+        </div>
+        <NumField label="Track B floor (USD / year)" value={draft.compFloors.trackB_USD} onChange={v => setFloors({ trackB_USD: v })} />
       </div>
 
-      <div>
-        <div className="text-[11px] text-gray-500 uppercase tracking-wider mb-1 flex items-center gap-1"><Building2 size={11} />Track A company tiers</div>
-        {["tier1", "tier2", "tier3"].map(t => (
-          <div key={t} className="py-1.5 border-b border-white/5 last:border-0">
-            <div className="text-[10px] text-gray-500 uppercase mb-1">{t}</div>
-            <div className="flex flex-wrap gap-1">
-              {s.companyTiers[t].map(c => <Badge key={c}>{c}</Badge>)}
+      {/* Track A company tiers */}
+      <div className="space-y-2">
+        <div className="text-[11px] text-gray-500 uppercase tracking-wider flex items-center gap-1"><Building2 size={11} />Track A company tiers</div>
+        <LinesArea label="Tier 1 (financial services — GCC comp band applies here)" hint="Comma-separated" rows={2} value={text.tier1} onChange={v => setText(t => ({ ...t, tier1: v }))} />
+        <LinesArea label="Tier 2" hint="Comma-separated" rows={2} value={text.tier2} onChange={v => setText(t => ({ ...t, tier2: v }))} />
+        <LinesArea label="Tier 3" hint="Comma-separated" rows={2} value={text.tier3} onChange={v => setText(t => ({ ...t, tier3: v }))} />
+      </div>
+
+      {/* Keyword clusters */}
+      <div className="space-y-2">
+        <div className="text-[11px] text-gray-500 uppercase tracking-wider flex items-center gap-1"><ListChecks size={11} />Keyword clusters</div>
+        <LinesArea label="One cluster per line" hint='Use OR inside a line, e.g. "operations manager OR operations director"' rows={7} value={text.clusters} onChange={v => setText(t => ({ ...t, clusters: v }))} />
+      </div>
+
+      {/* Sources */}
+      <div className="space-y-2">
+        <div className="text-[11px] text-gray-500 uppercase tracking-wider flex items-center gap-1"><Globe size={11} />Sources</div>
+        {draft.sources.map((src, i) => (
+          <div key={i} className="p-2 rounded-lg bg-white/5 border border-white/5 space-y-2">
+            <div className="flex items-center gap-2">
+              <button onClick={() => setSource(i, { enabled: !src.enabled })} title="Enable / disable">
+                <span className={`block w-2.5 h-2.5 rounded-full ${src.enabled ? "bg-emerald-400" : "bg-gray-700"}`} />
+              </button>
+              <input
+                value={src.domain}
+                onChange={e => setSource(i, { domain: e.target.value })}
+                placeholder="domain.com"
+                className="flex-1 bg-black/30 rounded px-2 py-1.5 text-xs text-white border border-white/5 focus:border-amber-500/30 focus:outline-none"
+              />
+              <input
+                value={src.label}
+                onChange={e => setSource(i, { label: e.target.value })}
+                placeholder="Label"
+                className="w-24 bg-black/30 rounded px-2 py-1.5 text-xs text-white border border-white/5 focus:border-amber-500/30 focus:outline-none"
+              />
+              <select value={src.track} onChange={e => setSource(i, { track: e.target.value })} className="bg-black/30 rounded px-1.5 py-1.5 text-xs text-white border border-white/5 focus:outline-none">
+                <option value="A">A</option><option value="B">B</option><option value="AB">A+B</option>
+              </select>
+              <select value={src.priority} onChange={e => setSource(i, { priority: Number(e.target.value) })} className="bg-black/30 rounded px-1.5 py-1.5 text-xs text-white border border-white/5 focus:outline-none">
+                <option value={1}>P1</option><option value={2}>P2</option>
+              </select>
+              <button onClick={() => removeSource(i)} className="text-gray-600 hover:text-red-400"><Trash2 size={13} /></button>
             </div>
           </div>
         ))}
+        <button onClick={addSource} className="w-full flex items-center justify-center gap-1.5 py-2 text-xs text-amber-400 bg-amber-500/10 rounded-lg hover:bg-amber-500/20 transition-colors">
+          <Plus size={13} /> Add source
+        </button>
       </div>
 
-      <div>
-        <div className="text-[11px] text-gray-500 uppercase tracking-wider mb-1 flex items-center gap-1"><ListChecks size={11} />Keyword clusters</div>
-        <div className="flex flex-wrap gap-1">
-          {s.keywordClusters.map(k => <Badge key={k} variant="blue">{k}</Badge>)}
+      {/* Scoring weights */}
+      <div className="space-y-2">
+        <div className="text-[11px] text-gray-500 uppercase tracking-wider">
+          Fit-scoring weights — total {weightTotal}{" "}
+          {weightTotal === 100
+            ? <span className="text-emerald-400">✓</span>
+            : <span className="text-amber-400">(spec expects 100)</span>}
+        </div>
+        <div className="grid grid-cols-3 gap-2">
+          <NumField label="Role family" value={w.roleFamily} onChange={v => setWeights({ roleFamily: v })} />
+          <NumField label="Remote flex" value={w.remoteFlex} onChange={v => setWeights({ remoteFlex: v })} />
+          <NumField label="Seniority" value={w.seniority} onChange={v => setWeights({ seniority: v })} />
+          <NumField label="Comp vs floor" value={w.comp} onChange={v => setWeights({ comp: v })} />
+          <NumField label="Shift" value={w.shift} onChange={v => setWeights({ shift: v })} />
+          <NumField label="WLB / stability" value={w.wlb} onChange={v => setWeights({ wlb: v })} />
         </div>
       </div>
 
-      <div>
-        <div className="text-[11px] text-gray-500 uppercase tracking-wider mb-1 flex items-center gap-1"><Globe size={11} />Sources</div>
-        {s.sources.map(src => (
-          <div key={src.domain} className="flex items-center gap-2 py-1.5 text-xs border-b border-white/5 last:border-0">
-            <span className={`w-1.5 h-1.5 rounded-full ${src.enabled ? "bg-emerald-400" : "bg-gray-700"}`} />
-            <span className="text-gray-300">{src.label}</span>
-            <span className="text-gray-600 text-[10px]">{src.domain}</span>
-            <span className="ml-auto flex items-center gap-1">
-              <Badge variant={src.track === "B" ? "teal" : src.track === "AB" ? "blue" : "amber"}>{src.track === "AB" ? "A+B" : src.track}</Badge>
-              <span className="text-[10px] text-gray-500">P{src.priority}</span>
-            </span>
-          </div>
-        ))}
-      </div>
-
-      <div>
-        <div className="text-[11px] text-gray-500 uppercase tracking-wider mb-1">Fit-scoring weights (total {Object.values(w).reduce((a, b) => a + b, 0)})</div>
-        <SettingsRow label="Role family" value={w.roleFamily} />
-        <SettingsRow label="Remote / hybrid flexibility" value={w.remoteFlex} />
-        <SettingsRow label="Seniority" value={w.seniority} />
-        <SettingsRow label="Comp vs floor" value={w.comp} />
-        <SettingsRow label="Shift timing" value={w.shift} />
-        <SettingsRow label="WLB / stability" value={w.wlb} />
+      {/* Save / discard */}
+      <div className="flex gap-2 pt-1">
+        <button
+          onClick={discard}
+          disabled={!dirty}
+          className="flex-1 flex items-center justify-center gap-1.5 py-2 text-xs text-gray-400 bg-white/5 rounded-lg hover:bg-white/10 transition-colors disabled:opacity-30"
+        >
+          <RotateCcw size={13} /> Discard changes
+        </button>
+        <button
+          onClick={save}
+          disabled={!dirty}
+          className="flex-1 flex items-center justify-center gap-1.5 py-2 text-xs font-medium rounded-lg bg-amber-500/15 text-amber-400 hover:bg-amber-500/25 transition-colors disabled:opacity-30"
+        >
+          <Save size={13} /> Save settings
+        </button>
       </div>
 
       <button
         onClick={onResetDefaults}
-        className="w-full py-2 text-xs text-gray-400 bg-white/5 rounded-lg hover:bg-white/10 transition-colors"
+        className="w-full py-2 text-xs text-gray-500 bg-white/5 rounded-lg hover:bg-white/10 transition-colors"
       >
-        Reset settings to defaults
+        Reset everything to spec defaults
       </button>
 
       <div className="pt-2 border-t border-white/5 text-xs text-gray-600 space-y-0.5">
         <div>Job Sourcing Radar v{APP_VERSION}</div>
         <div>Storage: window.storage · personal scope (shared: false)</div>
+        {s.lastUpdated && <div>Settings last saved {String(s.lastUpdated).slice(0, 10)}</div>}
       </div>
     </div>
   );
@@ -1209,6 +1426,19 @@ export default function JobSourcingRadar() {
     setScanning(false);
   }, [scanning, data.settings, data.roles, data.scans, saveRoles, saveScans]);
 
+  // Persist edited settings (Milestone 5). The next scan reads data.settings,
+  // so a successful save is all it takes for edits to apply — criterion 6.
+  const saveSettings = useCallback(async (next, toastMsg) => {
+    const ok = await storageSet(STORAGE_KEYS.settings, next);
+    if (ok) {
+      setData(d => ({ ...d, settings: next }));
+      if (toastMsg) setToast({ message: toastMsg, type: "success" });
+    } else {
+      setToast({ message: "Could not save settings — storage unavailable", type: "error" });
+    }
+    return ok;
+  }, []);
+
   const resetDefaults = useCallback(async () => {
     const fresh = { ...DEFAULT_SETTINGS, lastUpdated: new Date().toISOString() };
     const ok = await storageSet(STORAGE_KEYS.settings, fresh);
@@ -1236,7 +1466,7 @@ export default function JobSourcingRadar() {
       case "scan": return <ZoneScan data={data} scan={scan} scanning={scanning} onScan={runScan} />;
       case "pipeline": return <ZonePipeline data={data} onSaveRoles={saveRoles} />;
       case "log": return <ZoneLog data={data} />;
-      case "settings": return <ZoneSettings data={data} onResetDefaults={resetDefaults} />;
+      case "settings": return <ZoneSettings data={data} onSaveSettings={saveSettings} onResetDefaults={resetDefaults} />;
       default: return null;
     }
   };
