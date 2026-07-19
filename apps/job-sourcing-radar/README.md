@@ -17,8 +17,8 @@ ranks them, and stores a persistent pipeline in `window.storage`.
 | 3. Scan engine (2 API calls, web search, capped) | ✅ built |
 | 4. Scoring + india_eligible gate + scan log | ✅ built |
 | 5. Settings editor | ✅ built |
-| 6. Full acceptance run (spec §10) | ⏳ next — user-driven in claude.ai |
-| 7. decisions.md close-out | — |
+| 6. Full acceptance run (spec §10) | ⏳ open — user-driven in claude.ai (laptop + phone) |
+| 7. decisions.md close-out | ✅ written — see `../../docs/decisions.md` |
 
 ## Hard constraints (do not violate — spec §4)
 
