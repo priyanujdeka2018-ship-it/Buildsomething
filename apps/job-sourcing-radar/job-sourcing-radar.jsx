@@ -21,7 +21,11 @@ import {
 //   M3 — live scan engine: deterministic search-plan builder, two capped
 //        web-search API calls (Track A then B), strict top-12 JSON contract
 //        with defensive parsing, progressive merge into the pipeline
-// Coming next: M4 client-side scoring + scan log, M5 settings editor.
+//   M4 — deterministic client-side scoring (weights from settings, comp
+//        floors, startup/tech/sub-manager deductions), visible score
+//        breakdown per card, persistent scan log with per-track search
+//        counts and India-gate drop visibility
+// Coming next: M5 settings editor.
 //
 // HARD CONSTRAINTS BUILT AGAINST (spec §4):
 //   - runs as a single-file React artifact inside Claude.ai
@@ -34,7 +38,7 @@ import {
 // SECTION 1: CONSTANTS & DEFAULT SETTINGS
 // ============================================================
 
-const APP_VERSION = "1.0.0-m3";
+const APP_VERSION = "1.0.0-m4";
 
 // The three storage keys (spec §5). One key per dataset — each is read once
 // on load and written whole on change. No per-record storage calls.
@@ -465,6 +469,145 @@ function parseScanJson(text, track) {
 }
 
 // ============================================================
+// SECTION 2E: FIT SCORING (Milestone 4 — spec §6)
+// ============================================================
+// Deterministic 0-100 score computed CLIENT-SIDE from the extracted signals
+// and the weights in settings. The model's own fit estimate (from M3) is kept
+// as model_fit for reference, but ranking uses this score — so a weights edit
+// in Settings changes ranking on the next scan without touching code.
+
+// Deduction marker lists (spec §6). On Track B these are the primary
+// stability filter — there is no pre-vetted company list doing that work.
+const STARTUP_MARKERS = ["startup", "early stage", "seed round", "series a", "series b", "series c", "wear many hats", "scrappy", "founding team", "fast paced startup"];
+const TECH_MARKERS = ["software engineer", "developer", "sde", "full stack", "backend", "frontend", "devops", "data engineer", "machine learning", "coding required"];
+const SUB_MANAGER_MARKERS = ["analyst", "associate", "coordinator", "specialist", "intern", "account executive"];
+
+// Each sub-score returns 0..1; the weighted sum is then hit with deductions.
+
+function roleFamilyScore(role, settings) {
+  const t = normalizeText(role.title);
+  // Split clusters like "operations manager OR operations director" into terms.
+  const terms = settings.keywordClusters
+    .flatMap(c => c.split(/\s+OR\s+|\//i)).map(normalizeText).filter(Boolean);
+  if (terms.some(term => t.includes(term))) return 1.0;
+  const generic = ["operations", "program", "transformation", "process", "revenue", "collections", "receivables", "order to cash", "client", "implementation", "delivery"];
+  if (generic.some(g => t.includes(g))) return 0.7;
+  return 0.3;
+}
+
+function remoteFlexScore(role) {
+  return { remote: 1.0, hybrid: 0.7, onsite: 0.2 }[role.remote_type] ?? 0.5;
+}
+
+function seniorityScore(role) {
+  const t = " " + normalizeText(role.title) + " ";
+  if (/ (director|head of|vice president|vp|avp|general manager) /.test(t)) return 1.0;
+  if (/ senior manager /.test(t)) return 0.9;
+  if (/ (manager|lead) /.test(t)) return 0.8;
+  if (SUB_MANAGER_MARKERS.some(m => t.includes(" " + m + " "))) return 0.2;
+  return 0.6;
+}
+
+// Comp vs the per-track floor (spec §2). Unknown comp scores neutral 0.5 —
+// missing data shouldn't sink an otherwise strong role.
+function compScore(role, settings) {
+  const c = role.comp_signal;
+  if (!c || !c.amount) return 0.5;
+  const f = settings.compFloors;
+  if (role.track === "A") {
+    if (c.currency !== "INR") return 0.5; // can't compare confidently
+    if (c.amount >= f.trackA_LPA) return 1.0;
+    // 30-50L band is acceptable at financial-services GCCs (tier 1 list).
+    const co = normalizeText(role.company);
+    const finServ = settings.companyTiers.tier1.some(x => {
+      const n = normalizeText(x);
+      return n.includes(co) || co.includes(n);
+    });
+    if (finServ && c.amount >= f.trackA_gccBandMin && c.amount <= f.trackA_gccBandMax) return 0.8;
+    return Math.max(0, Math.min(1, c.amount / f.trackA_LPA));
+  }
+  if (c.currency !== "USD") return 0.5;
+  return c.amount >= f.trackB_USD ? 1.0 : Math.max(0, Math.min(1, c.amount / f.trackB_USD));
+}
+
+function shiftScore(role) {
+  return { india_day: 1.0, mixed: 0.7, us_night: 0.4 }[role.shift_signal] ?? 0.7;
+}
+
+// WLB / stability: being on the vetted Track A tier list is the strongest
+// signal; otherwise look for stability language in the extracted notes.
+function wlbScore(role, settings) {
+  const co = normalizeText(role.company);
+  const allTiers = [...settings.companyTiers.tier1, ...settings.companyTiers.tier2, ...settings.companyTiers.tier3].map(normalizeText);
+  const inTiers = allTiers.some(t => t === co || t.includes(co) || co.includes(t));
+  if (inTiers) return 1.0;
+  const notes = normalizeText((role.wlb_notes || "") + " " + (role.rationale || ""));
+  if (/(stable|established|enterprise|handbook|async|work life|wlb first)/.test(notes)) return 0.85;
+  return 0.6;
+}
+
+// The scorer. Returns the clamped score plus a human-readable breakdown so
+// the reasoning is visible on every role card (non-developer verifiability).
+// NOTE: Track B india_eligible=false roles never reach this function — they
+// are dropped at extraction by parseScanJson (spec §2 hard gate).
+function scoreRole(role, settings) {
+  const w = settings.scoringWeights;
+  const parts = [
+    ["role", roleFamilyScore(role, settings), w.roleFamily],
+    ["remote", remoteFlexScore(role), w.remoteFlex],
+    ["seniority", seniorityScore(role), w.seniority],
+    ["comp", compScore(role, settings), w.comp],
+    ["shift", shiftScore(role), w.shift],
+    ["wlb", wlbScore(role, settings), w.wlb],
+  ];
+  let score = parts.reduce((sum, [, s, weight]) => sum + s * weight, 0);
+  const notes = parts.map(([n, s, weight]) => `${n} ${Math.round(s * weight)}/${weight}`);
+
+  // Deductions (spec §6) — scanned across all extracted text for the role.
+  const blob = normalizeText([role.company, role.title, role.wlb_notes, role.rationale].join(" "));
+  if (STARTUP_MARKERS.some(m => blob.includes(m))) { score -= 15; notes.push("−15 startup markers"); }
+  if (TECH_MARKERS.some(m => blob.includes(m))) { score -= 20; notes.push("−20 pure-tech"); }
+  const t = " " + normalizeText(role.title) + " ";
+  const hasSenior = / (director|head of|vice president|vp|avp|general manager|manager|lead) /.test(t);
+  if (!hasSenior && SUB_MANAGER_MARKERS.some(m => t.includes(" " + m + " "))) { score -= 10; notes.push("−10 sub-manager"); }
+
+  return { score: Math.max(0, Math.min(100, Math.round(score))), notes: notes.join(" · ") };
+}
+
+// Attach scores to a batch of freshly-parsed roles (used by scan + samples).
+function applyScoring(roles, settings) {
+  return roles.map(r => {
+    const { score, notes } = scoreRole(r, settings);
+    return { ...r, model_fit: r.fit_score, fit_score: score, score_notes: notes };
+  });
+}
+
+/* ---------------------------------------------------------------
+   TEST HARNESS (unit-style) — paste alongside the functions above:
+
+   const S = DEFAULT_SETTINGS;
+   // strong Track A role at a tier-1 company scores high
+   scoreRole({ track:"A", company:"Northern Trust",
+     title:"Senior Manager Operations", remote_type:"remote",
+     comp_signal:{amount:45,currency:"INR"}, shift_signal:"india_day",
+     wlb_notes:"", rationale:"" }, S).score >= 90            // → true
+
+   // startup markers cost 15 (Track B's stability filter)
+   const base = { track:"B", company:"Acme", title:"Operations Manager",
+     remote_type:"remote", comp_signal:{amount:60000,currency:"USD"},
+     shift_signal:"mixed", wlb_notes:"", rationale:"" };
+   scoreRole(base, S).score -
+   scoreRole({ ...base, wlb_notes:"seed round, wear many hats" }, S).score
+     === 15                                                   // → true
+
+   // GCC band: ₹34L at a tier-1 fin-services company beats ₹34L elsewhere
+   scoreRole({ ...base, track:"A", company:"Wells Fargo India",
+     comp_signal:{amount:34,currency:"INR"} }, S).score >
+   scoreRole({ ...base, track:"A", company:"Unknown Co",
+     comp_signal:{amount:34,currency:"INR"} }, S).score       // → true
+   --------------------------------------------------------------- */
+
+// ============================================================
 // SECTION 3: SMALL SHARED UI PIECES (Career OS patterns)
 // ============================================================
 
@@ -647,6 +790,12 @@ function RoleCard({ role, onStar, onArchive }) {
       </div>
 
       {role.rationale && <p className="text-[10px] text-gray-500 leading-relaxed">{role.rationale}</p>}
+      {/* M4: the deterministic score breakdown — reasoning stays visible */}
+      {role.score_notes && (
+        <p className="text-[9px] text-gray-600 leading-relaxed" style={{ fontFamily: "ui-monospace, monospace" }}>
+          {role.score_notes}{role.model_fit != null ? ` · model est ${role.model_fit}` : ""}
+        </p>
+      )}
 
       <div className="flex items-center gap-2">
         <button
@@ -690,11 +839,12 @@ function ZonePipeline({ data, onSaveRoles }) {
     if (r) setStatus(id, r.status === "archived" ? "new" : "archived");
   };
 
-  // Sample loader (M2 only — replaced by the real scan in M3). Runs through
-  // mergeRoles, so pressing it twice demonstrates dedupe: second press adds 0
-  // new roles and only bumps last_seen.
+  // Sample loader (M2 stub; kept as a fixture). Samples flow through the SAME
+  // scoring + merge path as real scan results, so pressing it twice
+  // demonstrates dedupe and the cards show real computed score breakdowns.
   const loadSamples = () => {
-    const { roles: merged, found, added } = mergeRoles(roles, SAMPLE_ROLES);
+    const scored = applyScoring(SAMPLE_ROLES, data.settings);
+    const { roles: merged, found, added } = mergeRoles(roles, scored);
     onSaveRoles(merged, `Samples merged: ${found} found · ${added} new${added === 0 ? " (dedupe working)" : ""}`);
   };
   const clearAll = () => { onSaveRoles([], "Pipeline cleared"); setConfirmClear(false); };
@@ -768,24 +918,57 @@ function ZonePipeline({ data, onSaveRoles }) {
 }
 
 // ============================================================
-// SECTION 6: ZONE — LOG
+// SECTION 6: ZONE — LOG (Milestone 4: persistent scan history)
 // ============================================================
-// M1: empty state only. Scan-log entries get written in M4.
+// Every scan attempt is recorded — searches used vs. the cap per track
+// (acceptance criterion 5), found/new counts, the India-gate drop count
+// (criterion 4: if 0, we say so explicitly), and any errors.
 
 function ZoneLog({ data }) {
-  const scans = data.scans || [];
+  const scans = (data.scans || []).slice().reverse(); // newest first
   return (
     <div className="p-4 space-y-4">
       <div>
         <h2 className="text-base font-semibold text-white">Scan Log</h2>
-        <p className="text-xs text-gray-500 mt-0.5">{scans.length} scans recorded</p>
+        <p className="text-xs text-gray-500 mt-0.5">{scans.length} scans recorded · searches shown as used/cap</p>
       </div>
-      {scans.length === 0 && (
+      {scans.length === 0 ? (
         <EmptyState
           icon={ScrollText}
           title="No Scans Yet"
-          description="Every scan logs its timestamp, searches used per track (vs. the cap), and how many roles were found vs. new."
+          description="Every scan logs its timestamp, searches used per track (vs. the cap), roles found vs. new, and India-gate drops."
         />
+      ) : (
+        <div className="space-y-2">
+          {scans.map(sc => (
+            <div key={sc.id} className="p-3 rounded-lg bg-white/5 border border-white/5 space-y-1.5">
+              <div className="flex items-center gap-2 text-xs">
+                <span className="text-gray-300">{String(sc.timestamp || "").slice(0, 10)}</span>
+                <span className="text-gray-600">{String(sc.timestamp || "").slice(11, 16)}</span>
+                {sc.duration_s != null && <span className="text-[10px] text-gray-600">· {sc.duration_s}s</span>}
+                <span className="ml-auto text-[11px]">
+                  <span className="text-gray-200 font-medium">{sc.roles_found}</span>
+                  <span className="text-gray-500"> found · </span>
+                  <span className="text-emerald-400 font-medium">{sc.roles_new}</span>
+                  <span className="text-gray-500"> new</span>
+                </span>
+              </div>
+              <div className="flex items-center gap-1.5 flex-wrap">
+                <Badge variant={sc.searches_used_a <= sc.searches_cap_a ? "amber" : "red"}>A: {sc.searches_used_a}/{sc.searches_cap_a} searches</Badge>
+                <Badge variant={sc.searches_used_b <= sc.searches_cap_b ? "teal" : "red"}>B: {sc.searches_used_b}/{sc.searches_cap_b} searches</Badge>
+                {sc.dropped_ineligible > 0
+                  ? <Badge variant="blue">{sc.dropped_ineligible} dropped (India gate)</Badge>
+                  : <span className="text-[10px] text-gray-600">India gate: 0 dropped — none encountered this scan</span>}
+              </div>
+              {(sc.errors || []).length > 0 && (
+                <div className="text-[11px] text-red-300/90 flex items-start gap-1.5">
+                  <AlertCircle size={12} className="shrink-0 mt-0.5" />
+                  <span>{sc.errors.join(" · ")}</span>
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
       )}
     </div>
   );
@@ -933,6 +1116,14 @@ export default function JobSourcingRadar() {
     return ok;
   }, []);
 
+  // Persist the whole scan-log array (spec §5 batching — one key, whole write).
+  const saveScans = useCallback(async (nextScans) => {
+    const ok = await storageSet(STORAGE_KEYS.scans, nextScans);
+    if (ok) setData(d => ({ ...d, scans: nextScans }));
+    else setToast({ message: "Could not save scan log — storage unavailable", type: "error" });
+    return ok;
+  }, []);
+
   // ---- Scan orchestration (Milestone 3) ----
   // Sequential: Track A call → parse → merge → save (pipeline updates
   // immediately), then Track B the same way. Each track has its own
@@ -961,7 +1152,8 @@ export default function JobSourcingRadar() {
       });
       meta.searches_used_a = res.searchesUsed;
       const { roles: found } = parseScanJson(res.text, "A");
-      const merged = mergeRoles(rolesNow, found);
+      // M4: deterministic client-side scoring replaces the model's estimate.
+      const merged = mergeRoles(rolesNow, applyScoring(found, s));
       rolesNow = merged.roles;
       meta.found += merged.found; meta.added += merged.added;
       await saveRoles(rolesNow); // progressive render: A results land before B runs
@@ -983,7 +1175,7 @@ export default function JobSourcingRadar() {
       meta.searches_used_b = res.searchesUsed;
       const { roles: found, droppedIneligible } = parseScanJson(res.text, "B");
       meta.dropped_ineligible = droppedIneligible;
-      const merged = mergeRoles(rolesNow, found);
+      const merged = mergeRoles(rolesNow, applyScoring(found, s));
       rolesNow = merged.roles;
       meta.found += merged.found; meta.added += merged.added;
       await saveRoles(rolesNow);
@@ -1000,9 +1192,22 @@ export default function JobSourcingRadar() {
       summary: okAny ? `Scan finished in ${secs}s: ${meta.found} roles found, ${meta.added} new` : null,
       meta,
     }));
-    // Scan-log persistence (radar:scans) lands in Milestone 4.
+
+    // M4: persist the scan-log entry (spec §5 radar:scans) — written even on
+    // failure so the Log tab is an honest record of every attempt.
+    const entry = {
+      id: "scan-" + Date.now().toString(36),
+      timestamp: new Date().toISOString(),
+      duration_s: secs,
+      searches_used_a: meta.searches_used_a, searches_cap_a: s.searchCaps.trackA,
+      searches_used_b: meta.searches_used_b, searches_cap_b: s.searchCaps.trackB,
+      roles_found: meta.found, roles_new: meta.added,
+      dropped_ineligible: meta.dropped_ineligible,
+      errors: meta.errors,
+    };
+    await saveScans([...(data.scans || []), entry]);
     setScanning(false);
-  }, [scanning, data.settings, data.roles, saveRoles]);
+  }, [scanning, data.settings, data.roles, data.scans, saveRoles, saveScans]);
 
   const resetDefaults = useCallback(async () => {
     const fresh = { ...DEFAULT_SETTINGS, lastUpdated: new Date().toISOString() };
