@@ -10,14 +10,18 @@ import {
 // JOB SOURCING RADAR — v1 (Artifact Edition)
 // Spec: apps/job-sourcing-radar/docs/spec.md
 //
-// MILESTONE 1 (this file's current state): app shell only.
-//   - Four zones: Scan / Pipeline / Log / Settings
-//   - Default settings object (spec §3 targets+sources, §6 weights, §7 caps)
-//   - window.storage load/save layer with try/catch (personal scope,
-//     explicit shared:false on EVERY call — spec §8)
-//   - Loading, empty, and error states
-// Coming next: M2 roles list + star/archive, M3 scan engine,
-// M4 scoring, M5 settings editor.
+// BUILT SO FAR (milestones 1-3):
+//   M1 — four zones (Scan / Pipeline / Log / Settings), default settings
+//        (spec §3 targets+sources, §6 weights, §7 caps), window.storage
+//        layer with try/catch (personal scope, explicit shared:false — §8),
+//        loading/empty/error states
+//   M2 — roles list ranked by fit, track/shift/source badges, star/archive,
+//        dedupe (hash of company+title; re-finds bump last_seen only),
+//        sample data loader
+//   M3 — live scan engine: deterministic search-plan builder, two capped
+//        web-search API calls (Track A then B), strict top-12 JSON contract
+//        with defensive parsing, progressive merge into the pipeline
+// Coming next: M4 client-side scoring + scan log, M5 settings editor.
 //
 // HARD CONSTRAINTS BUILT AGAINST (spec §4):
 //   - runs as a single-file React artifact inside Claude.ai
@@ -30,7 +34,7 @@ import {
 // SECTION 1: CONSTANTS & DEFAULT SETTINGS
 // ============================================================
 
-const APP_VERSION = "1.0.0-m2";
+const APP_VERSION = "1.0.0-m3";
 
 // The three storage keys (spec §5). One key per dataset — each is read once
 // on load and written whole on change. No per-record storage calls.
@@ -285,6 +289,182 @@ const SAMPLE_ROLES = [
 ];
 
 // ============================================================
+// SECTION 2D: SCAN ENGINE (Milestone 3 — spec §3, §4, §7)
+// ============================================================
+// One scan = two Messages API calls (Track A, then Track B). Each call gets
+// the web-search tool with max_uses set from settings — the API stops
+// searching at the cap instead of running past it. No API key appears
+// anywhere: inside Claude.ai the platform injects auth and usage draws from
+// the Claude plan.
+
+// --- Deterministic search-plan builder --------------------------------------
+// This is what kills random searching (spec §3): queries are constructed
+// mechanically from settings — track × source priority × keyword cluster —
+// so two scans with the same settings produce the same plan.
+function buildSearchPlan(settings, track) {
+  const cap = track === "A" ? settings.searchCaps.trackA : settings.searchCaps.trackB;
+  const clusters = settings.keywordClusters;
+  // Sources for this track (AB sources serve both), priority 1 first.
+  const sources = settings.sources
+    .filter(s => s.enabled && (s.track === track || s.track === "AB"))
+    .sort((a, b) => a.priority - b.priority);
+  const queries = [];
+  if (track === "A") {
+    // Alternate company-targeted and source-targeted queries so both target
+    // lists and job portals get coverage inside the cap.
+    const companies = [
+      ...settings.companyTiers.tier1,
+      ...settings.companyTiers.tier2,
+      ...settings.companyTiers.tier3,
+    ];
+    let ci = 0, si = 0, ki = 0;
+    while (queries.length < cap && (companies.length || sources.length)) {
+      if (queries.length % 2 === 0 && companies.length) {
+        queries.push(`"${companies[ci % companies.length]}" ${clusters[ki % clusters.length]} jobs India`);
+        ci++;
+      } else if (sources.length) {
+        queries.push(`${clusters[ki % clusters.length]} jobs India manager site:${sources[si % sources.length].domain}`);
+        si++;
+      }
+      ki++;
+    }
+  } else {
+    // Track B: portal-driven only — no company list in v1 (spec §3).
+    let si = 0, ki = 0;
+    while (queries.length < cap && sources.length) {
+      queries.push(`remote ${clusters[ki % clusters.length]} jobs worldwide "anywhere" OR "India" site:${sources[si % sources.length].domain}`);
+      si++; ki++;
+    }
+  }
+  return queries;
+}
+
+// --- Scan system prompts ----------------------------------------------------
+// Both prompts demand ONLY compact JSON (spec §4): max_tokens is fixed at
+// 1000 per call, so 12 roles with short strings is the whole budget.
+
+function buildTrackASystem(settings) {
+  const f = settings.compFloors;
+  const plan = buildSearchPlan(settings, "A");
+  return `You are a job-sourcing scanner. Execute the SEARCH PLAN below using the web_search tool (budget ${settings.searchCaps.trackA} searches — follow the plan in order; skip a query only if earlier results already covered it). Then return the best CURRENTLY-OPEN roles as compact JSON.
+
+CRITERIA (Track A — financial services / GCC, India):
+- India-based; remote or strong-hybrid preferred
+- Non-technical / non-coding roles only (operations, program, transformation, process)
+- Manager / Senior Manager / Director band — nothing below Manager
+- Comp ₹${f.trackA_LPA} LPA+ (a ${f.trackA_gccBandMin}-${f.trackA_gccBandMax}L band is acceptable at financial-services GCCs)
+- Prefer stable, WLB-first companies; flag shift timing honestly
+- Priority companies: ${settings.companyTiers.tier1.join(", ")}
+- Also good: ${[...settings.companyTiers.tier2, ...settings.companyTiers.tier3].join(", ")}
+
+SEARCH PLAN:
+${plan.map((q, i) => `${i + 1}. ${q}`).join("\n")}
+
+OUTPUT — respond with ONLY this JSON. No preamble, no markdown, no code fences.
+Max 12 roles, ranked best-fit first. Keep EVERY string short (rationale ≤ 15 words, wlb_notes ≤ 10 words):
+{"roles":[{"company":"","title":"","url":"","source":"domain only","location":"","remote_type":"remote|hybrid|onsite","comp_signal":{"amount":0,"currency":"INR"},"shift_signal":"india_day|mixed|us_night","wlb_notes":"","fit":0,"rationale":""}]}
+comp_signal amount is in LPA lakhs; set comp_signal to null when pay is not stated. fit is your 0-100 estimate against the criteria.`;
+}
+
+function buildTrackBSystem(settings) {
+  const f = settings.compFloors;
+  const plan = buildSearchPlan(settings, "B");
+  return `You are a job-sourcing scanner. Execute the SEARCH PLAN below using the web_search tool (budget ${settings.searchCaps.trackB} searches — follow the plan in order; skip a query only if earlier results already covered it). Then return the best CURRENTLY-OPEN roles as compact JSON.
+
+CRITERIA (Track B — remote-first enterprises, global):
+- Fully remote roles at ESTABLISHED companies (no early-stage startups: funding-stage language, tiny headcount, "wear many hats" are disqualifiers)
+- HARD GATE: the role must be workable from India. If it restricts residency to US/EU/other regions or excludes India, DROP it entirely — do not include it in the output. Count drops in dropped_ineligible.
+- Non-technical ops / program / transformation roles
+- Manager / Senior Manager / Director band
+- Comp floor $${f.trackB_USD.toLocaleString()} USD; flag shift expectations honestly (us_night is common and fine to report)
+
+SEARCH PLAN:
+${plan.map((q, i) => `${i + 1}. ${q}`).join("\n")}
+
+OUTPUT — respond with ONLY this JSON. No preamble, no markdown, no code fences.
+Max 12 roles, ranked best-fit first. Keep EVERY string short (rationale ≤ 15 words, wlb_notes ≤ 10 words):
+{"dropped_ineligible":0,"roles":[{"company":"","title":"","url":"","source":"domain only","location":"","remote_type":"remote","india_eligible":true,"comp_signal":{"amount":0,"currency":"USD"},"shift_signal":"india_day|mixed|us_night","wlb_notes":"","fit":0,"rationale":""}]}
+comp_signal amount is absolute annual USD; set comp_signal to null when pay is not stated. india_eligible must be true for every role you return — set dropped_ineligible to how many otherwise-good roles you discarded for failing the India gate.`;
+}
+
+// --- API call ---------------------------------------------------------------
+// Mirrors the Career OS callClaudeAPI pattern, plus the web-search tool.
+// NOTE (spec §4/§8): the request carries no key or auth header of any kind —
+// running inside Claude.ai IS the auth. max_tokens is pinned at 1000.
+async function callScanAPI({ settings, systemPrompt, userMessage, maxUses, track }) {
+  const tool = { type: "web_search_20250305", name: "web_search", max_uses: maxUses };
+  // Optional hard domain restriction (settings toggle, default OFF — spec §3):
+  // subdomains are automatically included by the API.
+  if (settings.restrictToSourceDomains) {
+    tool.allowed_domains = settings.sources
+      .filter(s => s.enabled && (s.track === track || s.track === "AB"))
+      .map(s => s.domain);
+  }
+  const body = {
+    model: settings.model,
+    max_tokens: 1000,
+    system: systemPrompt,
+    messages: [{ role: "user", content: userMessage }],
+    tools: [tool],
+  };
+  const response = await fetch("https://api.anthropic.com/v1/messages", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!response.ok) throw new Error(`API error ${response.status} — try again in a minute`);
+  const data = await response.json();
+  // The response interleaves text blocks with server_tool_use (searches) and
+  // web_search_tool_result blocks; we want the text and the search count.
+  const text = (data.content || []).filter(b => b.type === "text").map(b => b.text).join("\n");
+  const searchesUsed = (data.content || []).filter(b => b.type === "server_tool_use").length;
+  return { text, searchesUsed, stopReason: data.stop_reason };
+}
+
+// --- Defensive parser -------------------------------------------------------
+// The contract says "JSON only", but we never trust that: strip code fences,
+// slice from first { to last }, validate every field, cap at 12, and (Track B)
+// drop anything not positively India-eligible — the §2 extraction gate.
+function parseScanJson(text, track) {
+  let t = (text || "").trim();
+  const fence = t.match(/```(?:json)?\s*([\s\S]*?)```/);
+  if (fence) t = fence[1].trim();
+  const start = t.indexOf("{"), end = t.lastIndexOf("}");
+  if (start < 0 || end <= start) throw new Error("response contained no JSON object");
+  const parsed = JSON.parse(t.slice(start, end + 1));
+  const list = Array.isArray(parsed.roles) ? parsed.roles : [];
+  let droppedIneligible = Number(parsed.dropped_ineligible) || 0;
+
+  const roles = list.slice(0, 12).map(r => ({
+    track,
+    company: String(r.company || "").slice(0, 80),
+    title: String(r.title || "").slice(0, 120),
+    url: String(r.url || "").slice(0, 300),
+    source: String(r.source || "").replace(/^https?:\/\//, "").replace(/^www\./, "").split("/")[0].slice(0, 60),
+    location: String(r.location || "").slice(0, 80),
+    remote_type: ["remote", "hybrid", "onsite"].includes(r.remote_type) ? r.remote_type : "unknown",
+    // Track A roles are India-based by definition; Track B needs the explicit flag.
+    india_eligible: track === "A" ? true : r.india_eligible === true,
+    comp_signal: (r.comp_signal && typeof r.comp_signal.amount === "number" && r.comp_signal.amount > 0)
+      ? { amount: r.comp_signal.amount, currency: r.comp_signal.currency === "USD" ? "USD" : (r.comp_signal.currency === "INR" ? "INR" : (track === "A" ? "INR" : "USD")) }
+      : null,
+    shift_signal: ["india_day", "mixed", "us_night"].includes(r.shift_signal) ? r.shift_signal : "mixed",
+    wlb_notes: String(r.wlb_notes || "").slice(0, 160),
+    fit_score: Math.max(0, Math.min(100, Math.round(Number(r.fit) || 0))),
+    rationale: String(r.rationale || "").slice(0, 240),
+  })).filter(r => r.company && r.title);
+
+  // Belt-and-braces Track B gate: if the model returned an ineligible role
+  // despite instructions, drop it here — ineligible roles are never stored.
+  let gated = roles;
+  if (track === "B") {
+    gated = roles.filter(r => r.india_eligible === true);
+    droppedIneligible += roles.length - gated.length;
+  }
+  return { roles: gated, droppedIneligible };
+}
+
+// ============================================================
 // SECTION 3: SMALL SHARED UI PIECES (Career OS patterns)
 // ============================================================
 
@@ -323,13 +503,12 @@ function Toast({ message, type, onDismiss }) {
 }
 
 // ============================================================
-// SECTION 4: ZONE — SCAN
+// SECTION 4: ZONE — SCAN (Milestone 3: live engine)
 // ============================================================
-// M1: shows what a scan WILL do (both track cards, criteria summary, caps).
-// The actual scan engine (two Messages API calls with web search) is M3;
-// the button is present but disabled so the layout is real.
+// Scan state lives in the app root (so switching tabs mid-scan doesn't lose
+// it); this zone renders the track cards, the trigger, and per-track status.
 
-function ZoneScan({ data }) {
+function ZoneScan({ data, scan, scanning, onScan }) {
   const s = data.settings;
   const tierCount = s.companyTiers.tier1.length + s.companyTiers.tier2.length + s.companyTiers.tier3.length;
   return (
@@ -367,14 +546,47 @@ function ZoneScan({ data }) {
         </div>
       </div>
 
-      {/* Scan trigger — wired up in Milestone 3 */}
+      {/* Scan trigger — one click runs Track A then Track B, merging results
+          into the pipeline as each track finishes (progressive render). */}
       <button
-        disabled
-        className="w-full flex items-center justify-center gap-1.5 py-2.5 text-xs font-medium rounded-lg bg-amber-500/15 text-amber-400 opacity-30 cursor-not-allowed"
+        onClick={onScan}
+        disabled={scanning}
+        className="w-full flex items-center justify-center gap-1.5 py-2.5 text-xs font-medium rounded-lg bg-amber-500/15 text-amber-400 hover:bg-amber-500/25 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
       >
-        <Search size={14} /> Run Scan
+        {scanning ? <Loader2 size={14} className="animate-spin" /> : <Search size={14} />}
+        {scanning ? "Scanning…" : "Run Scan"}
       </button>
-      <p className="text-[10px] text-gray-600 text-center">Scan engine arrives in Milestone 3 — this build is the app shell.</p>
+
+      {/* Per-track status cards: pending → running → done/error. One track
+          failing never hides the other's results (visible error states). */}
+      {(scan.a.state !== "idle" || scan.b.state !== "idle") && (
+        <div className="space-y-2">
+          {[["a", "Track A", "amber"], ["b", "Track B", "teal"]].map(([k, label, variant]) => {
+            const t = scan[k];
+            return (
+              <div key={k} className="p-2.5 rounded-lg bg-white/5 border border-white/5 space-y-1">
+                <div className="flex items-center gap-2 text-xs">
+                  <Badge variant={variant}>{label}</Badge>
+                  {t.state === "running" && <span className="flex items-center gap-1.5 text-amber-300"><Loader2 size={12} className="animate-spin" />{t.note}</span>}
+                  {t.state === "done" && <span className="flex items-center gap-1.5 text-emerald-300"><Check size={12} />{t.note}</span>}
+                  {t.state === "error" && <span className="flex items-center gap-1.5 text-red-300"><AlertCircle size={12} />failed</span>}
+                  {t.state === "pending" && <span className="text-gray-500">queued</span>}
+                </div>
+                {t.state === "error" && <p className="text-[11px] text-red-300/80 leading-relaxed">{t.note}</p>}
+              </div>
+            );
+          })}
+          {scan.summary && (
+            <div className="p-2.5 rounded-lg bg-emerald-500/10 border border-emerald-500/20 text-[11px] text-emerald-300">
+              {scan.summary} — see the Pipeline tab.
+            </div>
+          )}
+        </div>
+      )}
+
+      <p className="text-[10px] text-gray-600 text-center">
+        Manual trigger only · searches stop at the cap via max_uses · results merge into the pipeline with dedupe.
+      </p>
     </div>
   );
 }
@@ -721,6 +933,77 @@ export default function JobSourcingRadar() {
     return ok;
   }, []);
 
+  // ---- Scan orchestration (Milestone 3) ----
+  // Sequential: Track A call → parse → merge → save (pipeline updates
+  // immediately), then Track B the same way. Each track has its own
+  // try/catch so one failure never hides the other's results.
+  const IDLE_SCAN = { a: { state: "idle", note: "" }, b: { state: "idle", note: "" }, summary: null, meta: null };
+  const [scan, setScan] = useState(IDLE_SCAN);
+  const [scanning, setScanning] = useState(false);
+
+  const runScan = useCallback(async () => {
+    if (scanning) return;
+    setScanning(true);
+    const startedAt = Date.now();
+    const s = data.settings;
+    setScan({ a: { state: "running", note: `searching (cap ${s.searchCaps.trackA})…` }, b: { state: "pending", note: "" }, summary: null, meta: null });
+
+    let rolesNow = data.roles || [];
+    const meta = { searches_used_a: 0, searches_used_b: 0, found: 0, added: 0, dropped_ineligible: 0, errors: [] };
+
+    // --- Track A ---
+    try {
+      const res = await callScanAPI({
+        settings: s, track: "A",
+        systemPrompt: buildTrackASystem(s),
+        userMessage: "Run the Track A scan now. Respond with ONLY the JSON.",
+        maxUses: s.searchCaps.trackA,
+      });
+      meta.searches_used_a = res.searchesUsed;
+      const { roles: found } = parseScanJson(res.text, "A");
+      const merged = mergeRoles(rolesNow, found);
+      rolesNow = merged.roles;
+      meta.found += merged.found; meta.added += merged.added;
+      await saveRoles(rolesNow); // progressive render: A results land before B runs
+      setScan(sc => ({ ...sc, a: { state: "done", note: `${merged.found} found · ${merged.added} new · ${res.searchesUsed} searches` } }));
+    } catch (err) {
+      meta.errors.push("A: " + (err?.message || err));
+      setScan(sc => ({ ...sc, a: { state: "error", note: String(err?.message || err) } }));
+    }
+
+    // --- Track B ---
+    setScan(sc => ({ ...sc, b: { state: "running", note: `searching (cap ${s.searchCaps.trackB})…` } }));
+    try {
+      const res = await callScanAPI({
+        settings: s, track: "B",
+        systemPrompt: buildTrackBSystem(s),
+        userMessage: "Run the Track B scan now. Respond with ONLY the JSON.",
+        maxUses: s.searchCaps.trackB,
+      });
+      meta.searches_used_b = res.searchesUsed;
+      const { roles: found, droppedIneligible } = parseScanJson(res.text, "B");
+      meta.dropped_ineligible = droppedIneligible;
+      const merged = mergeRoles(rolesNow, found);
+      rolesNow = merged.roles;
+      meta.found += merged.found; meta.added += merged.added;
+      await saveRoles(rolesNow);
+      setScan(sc => ({ ...sc, b: { state: "done", note: `${merged.found} found · ${merged.added} new · ${res.searchesUsed} searches · ${droppedIneligible} dropped (India gate)` } }));
+    } catch (err) {
+      meta.errors.push("B: " + (err?.message || err));
+      setScan(sc => ({ ...sc, b: { state: "error", note: String(err?.message || err) } }));
+    }
+
+    const secs = Math.round((Date.now() - startedAt) / 1000);
+    const okAny = meta.found > 0 || meta.errors.length < 2;
+    setScan(sc => ({
+      ...sc,
+      summary: okAny ? `Scan finished in ${secs}s: ${meta.found} roles found, ${meta.added} new` : null,
+      meta,
+    }));
+    // Scan-log persistence (radar:scans) lands in Milestone 4.
+    setScanning(false);
+  }, [scanning, data.settings, data.roles, saveRoles]);
+
   const resetDefaults = useCallback(async () => {
     const fresh = { ...DEFAULT_SETTINGS, lastUpdated: new Date().toISOString() };
     const ok = await storageSet(STORAGE_KEYS.settings, fresh);
@@ -745,7 +1028,7 @@ export default function JobSourcingRadar() {
 
   const renderZone = () => {
     switch (zone) {
-      case "scan": return <ZoneScan data={data} />;
+      case "scan": return <ZoneScan data={data} scan={scan} scanning={scanning} onScan={runScan} />;
       case "pipeline": return <ZonePipeline data={data} onSaveRoles={saveRoles} />;
       case "log": return <ZoneLog data={data} />;
       case "settings": return <ZoneSettings data={data} onResetDefaults={resetDefaults} />;
